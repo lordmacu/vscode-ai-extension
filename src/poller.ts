@@ -126,6 +126,7 @@ export class Poller {
     systemPrompt?: string;
     maxInputTokens?: number;
     images?: string[];
+    tools?: import('./serverClient').OpenAITool[];
   }, workerId: number) {
     const prompt = (data.prompt || '').trim();
     const convId = data.id;
@@ -147,6 +148,14 @@ export class Poller {
     const startMs = Date.now();
     let responseText: string;
     try {
+      // Callback de tool calling: reporta al server y espera resultado de la app
+      const onToolCall = convId && data.tools?.length
+        ? async (callId: string, name: string, input: object): Promise<string> => {
+            await this.client.reportToolCall(convId, callId, name, input);
+            return this.client.waitForToolResult(callId);
+          }
+        : undefined;
+
       responseText = await Promise.race([
         executePrompt(prompt, convId, data.newChat, {
           modelFamily:    data.modelFamily    ?? this.modelFamily,
@@ -155,6 +164,8 @@ export class Poller {
           systemPrompt:   data.systemPrompt,
           maxInputTokens: data.maxInputTokens,
           images:         data.images,
+          tools:          data.tools,
+          onToolCall,
         }),
         timeout
       ]);

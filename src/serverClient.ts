@@ -1,3 +1,12 @@
+export interface OpenAITool {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters?: Record<string, any>;
+  };
+}
+
 export interface PromptData {
   prompt: string;
   newChat: boolean;
@@ -9,7 +18,8 @@ export interface PromptData {
   modelOptions?: Record<string, any>;
   systemPrompt?: string;
   maxInputTokens?: number;
-  images?: string[]; // base64 data URLs: "data:image/png;base64,..."
+  images?: string[];  // base64 data URLs: "data:image/png;base64,..."
+  tools?: OpenAITool[]; // tool definitions (OpenAI format)
 }
 
 export interface SavePayload {
@@ -48,5 +58,28 @@ export class ServerClient {
       headers: this.headers(),
       body: JSON.stringify(payload)
     });
+  }
+
+  // Reporta al servidor que Copilot quiere ejecutar un tool
+  async reportToolCall(convId: string, callId: string, name: string, input: object): Promise<void> {
+    await fetch(`${this.baseUrl}/api/tool/call`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ convId, callId, name, input })
+    });
+  }
+
+  // Long-poll hasta 60s esperando que la app envíe el resultado del tool
+  async waitForToolResult(callId: string): Promise<string> {
+    const res = await fetch(`${this.baseUrl}/api/tool/result/wait/${callId}`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(65000)
+    });
+    if (!res.ok) {
+      throw new Error(`Tool result error: ${res.status} ${await res.text()}`);
+    }
+    const data = await res.json() as { result?: unknown; error?: string };
+    if (data.error) { throw new Error(data.error); }
+    return typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
   }
 }
