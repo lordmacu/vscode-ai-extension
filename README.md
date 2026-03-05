@@ -170,9 +170,24 @@ The extension only uses two server endpoints:
   "justification": "optional justification string",
   "modelOptions": null,
   "systemPrompt": null,
-  "maxInputTokens": null
+  "maxInputTokens": null,
+  "images": ["data:image/png;base64,..."]
 }
 ```
+
+The `images` field is optional. When present, each entry is a base64 data URL (`data:image/png;base64,...`). The extension converts them into `LanguageModelDataPart` objects and appends them to the user message — enabling vision models to process the images natively via the Copilot LM API.
+
+### Image support
+
+The extension supports multimodal prompts. Images arrive from the server as base64 data URLs in the `images` array and are passed to Copilot using the VS Code `LanguageModelDataPart` API:
+
+```
+Server (base64 data URL) → LanguageModelDataPart(buffer, mime) → Copilot vision model
+```
+
+The user message sent to Copilot contains:
+1. A `LanguageModelTextPart` with the prompt text
+2. One `LanguageModelDataPart` per image (MIME type + raw bytes decoded from base64)
 
 ### Save payload (`POST /api/save` body)
 

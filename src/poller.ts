@@ -138,6 +138,7 @@ export class Poller {
 
     this.cb.onStatus('processing', true);
     this.cb.onLog('prompt', prompt, { conversationId: convId, newChat: data.newChat, modelFamily: data.modelFamily ?? this.modelFamily, workerId });
+    console.log(`[AI Runner] handlePrompt images: ${data.images?.length ?? 0}`, data.images?.map(u => u.slice(0, 60)));
 
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error(`Timeout: prompt took more than ${Math.round(this.timeoutMs / 1000)}s`)), this.timeoutMs)

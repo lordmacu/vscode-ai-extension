@@ -61,15 +61,18 @@ export async function executePrompt(
     messages.push(vscode.LanguageModelChatMessage.Assistant('Entendido.'));
   }
 
+  console.log(`[AI Runner] executePrompt images: ${images.length}`);
   const userParts: (vscode.LanguageModelTextPart | vscode.LanguageModelDataPart)[] = [
     new vscode.LanguageModelTextPart(prompt),
-    ...images.map(url => {
+    ...images.map((url, i) => {
       const match = url.match(/^data:(image\/\w+);base64,(.+)$/);
       const mime = (match?.[1] ?? 'image/png') as `image/${string}`;
       const bytes = Buffer.from(match?.[2] ?? url, 'base64');
+      console.log(`[AI Runner] image[${i}]: mime=${mime} bytes=${bytes.length}`);
       return new vscode.LanguageModelDataPart(bytes, mime);
     }),
   ];
+  console.log(`[AI Runner] userParts count: ${userParts.length}`);
   messages.push(vscode.LanguageModelChatMessage.User(userParts));
 
   // Truncar historial si supera el límite de tokens
