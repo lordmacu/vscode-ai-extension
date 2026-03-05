@@ -14,12 +14,14 @@ export interface PollerCallbacks {
   onLog: (type: 'prompt' | 'response' | 'error' | 'info', text: string, extra?: LogExtra) => void;
 }
 
+const WORKER_COUNT = 3; // workers paralelos
+
 export class Poller {
   private active = false;
   private ws: WebSocket | null = null;
-  private lastTaskId: number | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private client: ServerClient;
+  private activeConvIds = new Set<string>(); // guard de deduplicación
   public modelFamily: string = 'gpt-4.1';
 
   constructor(
@@ -36,8 +38,15 @@ export class Poller {
     if (this.active) { return; }
     this.active = true;
     this.cb.onStatus('idle', true);
-    this.cb.onLog('info', `WebSocket iniciado → ${this.serverUrl}`);
-    this.connect();
+    this.cb.onLog('info', `Iniciando ${WORKER_COUNT} workers → ${this.serverUrl}`);
+
+    // Conectar WebSocket solo para recibir actualizaciones de estado
+    this.connectWs();
+
+    // Lanzar N workers paralelos de long-polling
+    for (let i = 0; i < WORKER_COUNT; i++) {
+      this.runWorker(i);
+    }
   }
 
   stop() {
@@ -48,44 +57,127 @@ export class Poller {
       this.ws = null;
     }
     this.cb.onStatus('idle', false);
-    this.cb.onLog('info', 'WebSocket detenido');
+    this.cb.onLog('info', 'Workers detenidos');
   }
 
   dispose() { this.stop(); }
 
-  private connect() {
-    if (!this.active) { return; }
+  // ─── Worker loop ─────────────────────────────────────────────────────────────
+  private async runWorker(workerId: number) {
+    while (this.active) {
+      try {
+        const data = await this.client.waitForPrompt();
+        if (!this.active) { break; }
 
-    // Construir URL WebSocket: https→wss, http→ws
+        const prompt = (data.prompt || '').trim();
+        if (!prompt) { continue; } // timeout del servidor — volver a esperar
+
+        await this.handlePrompt(data, workerId);
+      } catch (err) {
+        if (!this.active) { break; }
+        // Error de red — esperar un poco antes de reintentar
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes('ECONNREFUSED') && !msg.includes('ENOTFOUND') && !msg.includes('timeout')) {
+          this.cb.onLog('error', `Worker ${workerId}: ${msg}`);
+        }
+        await this.sleep(3000);
+      }
+    }
+  }
+
+  // ─── Procesar un prompt individual ───────────────────────────────────────────
+  private async handlePrompt(data: {
+    prompt: string;
+    newChat: boolean;
+    id: string | null;
+    extractJson: boolean;
+    saveLastMessageOnly?: boolean;
+    modelFamily?: string;
+    justification?: string;
+    modelOptions?: Record<string, any>;
+    systemPrompt?: string;
+    maxInputTokens?: number;
+  }, workerId: number) {
+    const prompt = (data.prompt || '').trim();
+    const convId = data.id;
+
+    // Evitar doble procesamiento si dos workers recibieran el mismo convId (no debería pasar)
+    if (convId && this.activeConvIds.has(convId)) {
+      return;
+    }
+    if (convId) { this.activeConvIds.add(convId); }
+
+    this.cb.onStatus('processing', true);
+    this.cb.onLog('prompt', prompt, { conversationId: convId, newChat: data.newChat });
+
+    const TIMEOUT_MS = 120000;
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Timeout: el prompt tardó más de 2 minutos')), TIMEOUT_MS)
+    );
+
+    let responseText: string;
+    try {
+      responseText = await Promise.race([
+        executePrompt(prompt, convId, data.newChat, {
+          modelFamily:    data.modelFamily    ?? this.modelFamily,
+          justification:  data.justification,
+          modelOptions:   data.modelOptions,
+          systemPrompt:   data.systemPrompt,
+          maxInputTokens: data.maxInputTokens,
+        }),
+        timeout
+      ]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.cb.onLog('error', msg, { conversationId: convId });
+      this.cb.onStatus('error', true);
+      if (convId) { this.activeConvIds.delete(convId); }
+      setTimeout(() => { if (this.active) { this.cb.onStatus('idle', true); } }, 3000);
+      return;
+    }
+
+    await this.client.saveResponse({
+      text: responseText,
+      prompt,
+      promptId: convId,
+      extractJson: data.extractJson
+    });
+
+    this.cb.onLog('response', responseText, { conversationId: convId });
+    this.cb.onStatus('success', true);
+    if (convId) { this.activeConvIds.delete(convId); }
+    setTimeout(() => { if (this.active) { this.cb.onStatus('idle', true); } }, 3000);
+  }
+
+  // ─── WebSocket para actualizaciones de estado (no prompts) ───────────────────
+  private connectWs() {
+    if (!this.active) { return; }
     const wsUrl = this.serverUrl.replace(/^https/, 'wss').replace(/^http/, 'ws') + '/ws?key=' + encodeURIComponent(this.apiKey);
 
     let socket: WebSocket;
     try {
       socket = new (WebSocket as any)(wsUrl);
       this.ws = socket;
-    } catch (err) {
-      this.scheduleReconnect();
+    } catch {
+      this.scheduleWsReconnect();
       return;
     }
 
     socket.on('open', () => {
-      this.cb.onLog('info', 'WebSocket conectado');
+      this.cb.onLog('info', 'WebSocket conectado (estado)');
     });
 
     socket.on('message', (raw: WebSocket.RawData) => {
       try {
         const msg = JSON.parse(raw.toString());
-        if (msg.type === 'connected') { return; }
-        if (msg.type === 'prompt') { this.handlePrompt(msg); }
+        // Solo recibimos mensajes de estado — los prompts llegan via long-poll
+        if (msg.type === 'connected' || msg.type === 'status') { return; }
       } catch (_) {}
     });
 
     socket.on('close', () => {
       this.ws = null;
-      if (this.active) {
-        this.cb.onLog('info', 'WebSocket desconectado, reconectando…');
-        this.scheduleReconnect();
-      }
+      if (this.active) { this.scheduleWsReconnect(); }
     });
 
     socket.on('error', (err: Error) => {
@@ -97,70 +189,11 @@ export class Poller {
     socket.on('pong', () => { /* keep-alive */ });
   }
 
-  private async handlePrompt(data: {
-    prompt: string;
-    newChat: boolean;
-    id: string | null;
-    extractJson: boolean;
-    taskId: number | null;
-    modelFamily?: string;
-    justification?: string;
-    modelOptions?: Record<string, any>;
-    systemPrompt?: string;
-    maxInputTokens?: number;
-  }) {
-    const prompt = (data.prompt || '').trim();
-    if (!prompt) { return; }
-    if (data.taskId === this.lastTaskId) { return; }
-
-    this.lastTaskId = data.taskId;
-    this.cb.onStatus('processing', true);
-    this.cb.onLog('prompt', prompt, { conversationId: data.id, newChat: data.newChat });
-
-    const TIMEOUT_MS = 120000; // 2min — alineado con el timeout del servidor
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Timeout: el prompt tardó más de 2 minutos')), TIMEOUT_MS)
-    );
-
-    let responseText: string;
-    try {
-      responseText = await Promise.race([
-        executePrompt(prompt, data.id, data.newChat, {
-          modelFamily:    data.modelFamily    ?? this.modelFamily,
-          justification:  data.justification,
-          modelOptions:   data.modelOptions,
-          systemPrompt:   data.systemPrompt,
-          maxInputTokens: data.maxInputTokens,
-        }),
-        timeout
-      ]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.cb.onLog('error', msg);
-      this.cb.onStatus('error', true);
-      await this.client.clearPrompt();
-      setTimeout(() => { if (this.active) { this.cb.onStatus('idle', true); } }, 3000);
-      return;
-    }
-
-    await this.client.saveResponse({
-      text: responseText,
-      prompt,
-      promptId: data.id,
-      extractJson: data.extractJson
-    });
-    await this.client.clearPrompt();
-
-    this.cb.onLog('response', responseText);
-    this.cb.onStatus('success', true);
-    setTimeout(() => { if (this.active) { this.cb.onStatus('idle', true); } }, 3000);
-  }
-
-  private scheduleReconnect() {
+  private scheduleWsReconnect() {
     this.clearReconnect();
     this.reconnectTimer = setTimeout(() => {
-      if (this.active) { this.connect(); }
-    }, 3000);
+      if (this.active) { this.connectWs(); }
+    }, 5000);
   }
 
   private clearReconnect() {
@@ -168,5 +201,9 @@ export class Poller {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+  }
+
+  private sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }

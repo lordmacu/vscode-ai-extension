@@ -287,8 +287,9 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   let currentTab = 'current';
 
   // ── State ──
-  let currentConv = null;
-  // { id, startTime, exchanges:[{prompt,promptTs,response,responseTs}], pendingPrompt:{text,ts}|null }
+  // activeConvs: Map<convId|'__anon__', convObj>
+  // convObj: { id, startTime, exchanges:[{prompt,promptTs,response,responseTs}], pendingPrompt:{text,ts}|null }
+  let activeConvs = new Map();
   let history = [];  // archived conversations, newest first
 
   // ── DOM refs ──
@@ -364,27 +365,37 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     return div;
   }
 
-  // ── Render current conversation ──
+  // ── Render current view (all active conversations) ──
   function renderCurrentView() {
     Array.from(viewCurrent.children).forEach(c => { if (c !== emptyCurrent) c.remove(); });
 
-    const hasContent = currentConv && (currentConv.exchanges.length > 0 || currentConv.pendingPrompt);
+    const hasContent = activeConvs.size > 0;
     emptyCurrent.style.display = hasContent ? 'none' : '';
     if (!hasContent) { return; }
 
-    currentConv.exchanges.forEach(ex => {
-      const wrap = document.createElement('div');
-      wrap.className = 'exchange';
-      wrap.appendChild(makeBubble('prompt',   'Prompt',    trunc(ex.prompt,   400)));
-      wrap.appendChild(makeBubble('response', 'Respuesta', trunc(ex.response, 400)));
-      viewCurrent.appendChild(wrap);
-    });
+    for (const conv of activeConvs.values()) {
+      // Separator header when multiple conversations active
+      if (activeConvs.size > 1) {
+        const sep = document.createElement('div');
+        sep.style.cssText = 'font-size:9px;opacity:.5;text-transform:uppercase;letter-spacing:.06em;padding:4px 0 2px;border-top:1px solid var(--vscode-panel-border);margin-top:4px;';
+        sep.textContent = conv.id ? conv.id.slice(-12) : 'conv';
+        viewCurrent.appendChild(sep);
+      }
 
-    if (currentConv.pendingPrompt) {
-      const wrap = document.createElement('div');
-      wrap.className = 'exchange';
-      wrap.appendChild(makePendingBubble(currentConv.pendingPrompt.text));
-      viewCurrent.appendChild(wrap);
+      conv.exchanges.forEach(ex => {
+        const wrap = document.createElement('div');
+        wrap.className = 'exchange';
+        wrap.appendChild(makeBubble('prompt',   'Prompt',    trunc(ex.prompt,   400)));
+        wrap.appendChild(makeBubble('response', 'Respuesta', trunc(ex.response, 400)));
+        viewCurrent.appendChild(wrap);
+      });
+
+      if (conv.pendingPrompt) {
+        const wrap = document.createElement('div');
+        wrap.className = 'exchange';
+        wrap.appendChild(makePendingBubble(conv.pendingPrompt.text));
+        viewCurrent.appendChild(wrap);
+      }
     }
 
     viewCurrent.scrollTop = viewCurrent.scrollHeight;
@@ -454,43 +465,52 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   }
 
   // ── Conversation management ──
-  function archiveCurrent() {
-    if (currentConv && currentConv.exchanges.length > 0) {
-      history.unshift(currentConv);
+  function archiveConv(convId) {
+    const key = convId || '__anon__';
+    const conv = activeConvs.get(key);
+    if (conv && conv.exchanges.length > 0) {
+      history.unshift(conv);
       updateHistBadge();
       renderHistoryView();
     }
-    currentConv = null;
+    activeConvs.delete(key);
   }
 
   function handlePrompt(text, timestamp, conversationId, newChat) {
-    const isNewConv = !currentConv
-      || newChat === true
-      || (conversationId && conversationId !== currentConv.id);
+    const key = conversationId || '__anon__';
 
-    if (isNewConv) {
-      archiveCurrent();
-      currentConv = { id: conversationId || null, startTime: timestamp, exchanges: [], pendingPrompt: null };
+    // newChat: archive the existing conv for this key if requested
+    if (newChat && activeConvs.has(key)) {
+      archiveConv(key);
     }
 
-    currentConv.pendingPrompt = { text: text, ts: timestamp };
+    if (!activeConvs.has(key)) {
+      activeConvs.set(key, { id: conversationId || null, startTime: timestamp, exchanges: [], pendingPrompt: null });
+    }
+
+    const conv = activeConvs.get(key);
+    conv.pendingPrompt = { text, ts: timestamp };
     renderCurrentView();
 
     // Auto-switch to current tab when a new prompt arrives
     if (currentTab !== 'current') { switchTab('current'); }
   }
 
-  function handleResponse(text, timestamp) {
-    if (currentConv && currentConv.pendingPrompt) {
-      currentConv.exchanges.push({
-        prompt:     currentConv.pendingPrompt.text,
-        promptTs:   currentConv.pendingPrompt.ts,
+  function handleResponse(text, timestamp, conversationId) {
+    const key = conversationId || '__anon__';
+    const conv = activeConvs.get(key);
+    if (conv && conv.pendingPrompt) {
+      conv.exchanges.push({
+        prompt:     conv.pendingPrompt.text,
+        promptTs:   conv.pendingPrompt.ts,
         response:   text,
         responseTs: timestamp
       });
-      currentConv.pendingPrompt = null;
+      conv.pendingPrompt = null;
     }
     renderCurrentView();
+    // Move completed conversation to history after a short delay
+    setTimeout(() => { archiveConv(key); renderCurrentView(); }, 4000);
   }
 
   // ── Model selector ──
@@ -514,7 +534,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
       if (data.type === 'prompt') {
         handlePrompt(data.text, data.timestamp, data.conversationId, data.newChat);
       } else if (data.type === 'response') {
-        handleResponse(data.text, data.timestamp);
+        handleResponse(data.text, data.timestamp, data.conversationId);
       }
     }
   });

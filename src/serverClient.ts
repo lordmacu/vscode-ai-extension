@@ -4,9 +4,6 @@ export interface PromptData {
   saveLastMessageOnly: boolean;
   id: string | null;
   extractJson: boolean;
-  isProcessing: boolean;
-  taskId: number | null;
-  // Opciones del modelo
   modelFamily?: string;
   justification?: string;
   modelOptions?: Record<string, any>;
