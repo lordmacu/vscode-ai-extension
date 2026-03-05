@@ -4,7 +4,7 @@ import { AiRunnerProvider } from './webviewProvider';
 let provider: AiRunnerProvider | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
-    provider = new AiRunnerProvider(context.extensionUri);
+    provider = new AiRunnerProvider(context);
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(

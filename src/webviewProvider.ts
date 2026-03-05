@@ -5,9 +5,8 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'aiRunner.panel';
     private _view?: vscode.WebviewView;
     private _poller?: Poller;
-    private _modelFamily: string = 'gpt-4.1';
 
-    constructor(private readonly _extensionUri: vscode.Uri) {}
+    constructor(private readonly _context: vscode.ExtensionContext) {}
 
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
@@ -18,15 +17,31 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
         webviewView.webview.options = { enableScripts: true };
         webviewView.webview.html = this._getHtml();
 
-        webviewView.webview.onDidReceiveMessage((msg) => {
+        webviewView.webview.onDidReceiveMessage(async (msg) => {
             if (msg.command === 'start') { this._startPoller(); }
             else if (msg.command === 'stop') { this._stopPoller(); }
-            else if (msg.command === 'setModel') {
-                this._modelFamily = msg.family;
-                if (this._poller) { this._poller.modelFamily = msg.family; }
+            else if (msg.command === 'clearAll') { await this._clearAll(); }
+            else if (msg.command === 'ready') {
+                const { serverUrl } = this._getConfig();
+                const savedHistory = this._context.globalState.get<any[]>('aiRunnerHistory', []);
+                this._post({ command: 'init', serverUrl, savedHistory });
+            }
+            else if (msg.command === 'saveHistory') {
+                const entries = (msg.history || []).slice(0, 100);
+                await this._context.globalState.update('aiRunnerHistory', entries);
+            }
+            else if (msg.command === 'setServerUrl') {
+                let url = (msg.url || '').trim();
+                while (url.endsWith('/')) { url = url.slice(0, -1); }
+                if (!url) { return; }
+                await vscode.workspace.getConfiguration('aiRunner').update('serverUrl', url, vscode.ConfigurationTarget.Global);
+                if (this._poller?.running) {
+                    this._poller.dispose();
+                    this._poller = undefined;
+                    this._startPoller();
+                }
             }
         });
-
     }
 
     private _getConfig() {
@@ -54,12 +69,14 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
                     text,
                     timestamp: new Date().toLocaleTimeString('es-MX', { hour12: false }),
                     conversationId: extra?.conversationId,
-                    newChat: extra?.newChat
+                    newChat: extra?.newChat,
+                    modelFamily: extra?.modelFamily,
+                    workerId: extra?.workerId,
+                    elapsed: extra?.elapsed,
                 });
             }
         });
-        this._poller.modelFamily = this._modelFamily;
-
+        this._poller.modelFamily = 'gpt-4.1';
         this._poller.start();
     }
 
@@ -67,8 +84,21 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
         this._poller?.stop();
     }
 
-    public startPoller()  { this._startPoller(); }
-    public stopPoller()   { this._stopPoller();  }
+    private async _clearAll() {
+        const { serverUrl, apiKey } = this._getConfig();
+        try {
+            await fetch(`${serverUrl}/api/prompt/clear`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
+                body: JSON.stringify({ cancel: true })
+            });
+        } catch (_) {}
+        await this._context.globalState.update('aiRunnerHistory', []);
+        this._post({ command: 'clearAllDone' });
+    }
+
+    public startPoller()   { this._startPoller(); }
+    public stopPoller()    { this._stopPoller(); }
     public disposePoller() { this._poller?.dispose(); }
 
     private _post(msg: unknown) {
@@ -109,22 +139,47 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   .badge.error      { background: rgba(229,83,75,.15); color: #f48771; }
   .badge.error .dot { background: #f48771; }
   @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.7)} }
-  .server-row { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
+  .server-row { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
   .server-label { font-size: 10px; color: var(--vscode-descriptionForeground); flex-shrink: 0; }
-  .server-url {
-    font-size: 10px; font-family: var(--vscode-editor-font-family, monospace);
-    color: var(--vscode-textLink-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .model-row { display: flex; align-items: center; gap: 5px; }
-  .model-label { font-size: 10px; color: var(--vscode-descriptionForeground); flex-shrink: 0; }
-  .model-select {
-    flex: 1; font-size: 10px; font-family: inherit;
+  .server-input {
+    flex: 1; font-size: 10px; font-family: var(--vscode-editor-font-family, monospace);
     background: var(--vscode-input-background); color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, transparent);
-    border-radius: 3px; padding: 2px 4px; cursor: pointer; outline: none;
+    border-radius: 3px; padding: 2px 5px; outline: none; min-width: 0;
   }
-  .model-select:focus { border-color: var(--vscode-focusBorder); }
-  .server-url.empty { color: var(--vscode-descriptionForeground); font-style: italic; font-family: inherit; }
+  .server-input:focus { border-color: var(--vscode-focusBorder); }
+  .server-save-btn {
+    font-size: 10px; padding: 2px 6px; border-radius: 3px; border: none; cursor: pointer;
+    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+    flex-shrink: 0; display: none;
+  }
+  .server-save-btn.visible { display: block; }
+  .model-hint { font-size: 10px; color: var(--vscode-descriptionForeground); opacity: .7; }
+
+  /* ── LOG PANEL ── */
+  .log-panel { flex-shrink: 0; border-bottom: 1px solid var(--vscode-panel-border); }
+  .log-toggle {
+    display: flex; align-items: center; gap: 5px; padding: 4px 12px;
+    cursor: pointer; user-select: none; background: none; border: none; width: 100%;
+    font-family: inherit; color: var(--vscode-descriptionForeground);
+  }
+  .log-toggle:hover { background: var(--vscode-list-hoverBackground); }
+  .log-arrow { font-size: 8px; transition: transform .15s; }
+  .log-panel.open .log-arrow { transform: rotate(90deg); }
+  .log-toggle-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; flex: 1; text-align: left; }
+  .log-err-dot { width: 6px; height: 6px; border-radius: 50%; background: #f48771; display: none; flex-shrink: 0; }
+  .log-err-dot.visible { display: block; }
+  .log-body { display: none; max-height: 120px; overflow-y: auto; padding: 4px 8px 6px; }
+  .log-panel.open .log-body { display: block; }
+  .log-body::-webkit-scrollbar { width: 4px; }
+  .log-body::-webkit-scrollbar-thumb { background: rgba(128,128,128,.3); border-radius: 2px; }
+  .log-line {
+    font-family: var(--vscode-editor-font-family, monospace); font-size: 10px;
+    line-height: 1.5; word-break: break-all; padding: 1px 0;
+    color: var(--vscode-descriptionForeground);
+  }
+  .log-line.err { color: #f48771; }
+  .log-line.info { opacity: .75; }
 
   /* ── TABS ── */
   .tabs {
@@ -162,22 +217,23 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   .empty-icon { font-size: 24px; }
   .empty-text { font-size: 11px; }
 
-  /* ── EXCHANGE (prompt + response pair) ── */
+  /* ── BUBBLES ── */
   .exchange { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
   .bubble { border-radius: 4px; padding: 6px 8px; border-left: 2px solid transparent; }
   .bubble.sm { padding: 4px 7px; }
   .bubble-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 3px; opacity: .7; }
   .bubble-text { font-size: 11.5px; line-height: 1.45; word-break: break-word; }
   .bubble.sm .bubble-text { font-size: 11px; }
-
   .bubble.prompt   { background: rgba(0,122,204,.08); border-left-color: var(--vscode-textLink-foreground); }
   .bubble.prompt   .bubble-label { color: var(--vscode-textLink-foreground); }
   .bubble.prompt   .bubble-text  { opacity: .9; }
   .bubble.response { background: rgba(76,175,80,.07); border-left-color: #4caf50; }
   .bubble.response .bubble-label { color: #4caf50; }
   .bubble.response .bubble-text  { opacity: .85; }
+  .bubble.response.error { background: rgba(229,83,75,.08); border-left-color: #f48771; }
+  .bubble.response.error .bubble-label { color: #f48771; }
 
-  /* Pending animation */
+  /* ── PENDING ANIMATION ── */
   .pending-dots { display: inline-flex; gap: 3px; align-items: center; margin-top: 4px; }
   .pending-dots span {
     width: 5px; height: 5px; border-radius: 50%; background: #4fc3f7;
@@ -186,6 +242,28 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   .pending-dots span:nth-child(2) { animation-delay: .2s; }
   .pending-dots span:nth-child(3) { animation-delay: .4s; }
   @keyframes bounce { 0%,80%,100%{transform:scale(.6)} 40%{transform:scale(1)} }
+
+  /* ── CONV CARDS (Actual tab) ── */
+  .conv-item { border-radius: 4px; border: 1px solid rgba(0,122,204,.35); overflow: hidden; margin-bottom: 4px; }
+  .conv-item-header {
+    display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+    cursor: pointer; background: var(--vscode-input-background); user-select: none;
+  }
+  .conv-item-header:hover { background: var(--vscode-list-hoverBackground); }
+  .conv-arrow { font-size: 9px; opacity: .6; flex-shrink: 0; transition: transform .15s; }
+  .conv-item.open .conv-arrow { transform: rotate(90deg); }
+  .conv-item-meta { flex: 1; min-width: 0; }
+  .conv-item-time { font-size: 10px; color: var(--vscode-descriptionForeground); opacity: .7; }
+  .conv-item-preview { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .9; }
+  .conv-item-badge { font-size: 9px; flex-shrink: 0; padding: 1px 6px; border-radius: 8px; font-weight: 600; }
+  .conv-item-badge.processing { background: rgba(0,122,204,.2); color: #4fc3f7; }
+  .conv-item-badge.done { background: rgba(76,175,80,.15); color: #4caf50; }
+  .conv-item-body {
+    display: none; padding: 6px 8px;
+    border-top: 1px solid var(--vscode-panel-border);
+    flex-direction: column; gap: 3px;
+  }
+  .conv-item.open .conv-item-body { display: flex; }
 
   /* ── HISTORY ITEMS ── */
   .hist-item { border-radius: 4px; border: 1px solid var(--vscode-panel-border); overflow: hidden; margin-bottom: 4px; }
@@ -227,6 +305,13 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   .toggle-btn:disabled { opacity: .5; cursor: not-allowed; }
   .toggle-btn.stop { background: var(--vscode-statusBarItem-errorBackground, #c72e0f); color: #fff; }
   .toggle-btn.stop:hover { background: #d9362a; }
+  .clear-btn {
+    padding: 6px 8px; background: none; border: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-descriptionForeground); border-radius: 3px; cursor: pointer;
+    font-size: 13px; line-height: 1; transition: background .15s, color .15s; flex-shrink: 0;
+  }
+  .clear-btn:hover { background: rgba(229,83,75,.15); color: #f48771; border-color: #f48771; }
+  .clear-btn:disabled { opacity: .35; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -238,21 +323,22 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   </div>
   <div class="server-row">
     <span class="server-label">Server:</span>
-    <span class="server-url empty" id="serverUrl">–</span>
+    <input class="server-input" id="serverInput" type="text" placeholder="https://..." spellcheck="false" />
+    <button class="server-save-btn" id="serverSaveBtn" onclick="saveServerUrl()">Guardar</button>
   </div>
-  <div class="model-row">
-    <span class="model-label">Model:</span>
-    <select class="model-select" id="modelSelect" onchange="onModelChange(this.value)">
-      <option value="gpt-4.1" selected>GPT-4.1 (gratis)</option>
-      <option value="gpt-4o">GPT-4o</option>
-      <option value="gpt-4">GPT-4</option>
-      <option value="o4-mini">o4-mini</option>
-      <option value="o3-mini">o3-mini</option>
-      <option value="claude-3.5-sonnet">Claude 3.5 Sonnet</option>
-      <option value="claude-3.7-sonnet">Claude 3.7 Sonnet</option>
-      <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-    </select>
+  <div class="server-row" style="margin-bottom:0">
+    <span class="server-label">Model:</span>
+    <span class="model-hint">por peticion (default: gpt-4.1)</span>
   </div>
+</div>
+
+<div class="log-panel" id="logPanel">
+  <button class="log-toggle" onclick="toggleLogPanel()">
+    <span class="log-arrow" id="logArrow">&#9654;</span>
+    <span class="log-toggle-label">Logs</span>
+    <span class="log-err-dot" id="logErrDot"></span>
+  </button>
+  <div class="log-body" id="logBody"></div>
 </div>
 
 <div class="tabs">
@@ -264,49 +350,75 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
 
 <div class="view" id="viewCurrent">
   <div class="empty" id="emptyCurrent">
-    <span class="empty-icon">◎</span>
+    <span class="empty-icon">&#9678;</span>
     <span class="empty-text">Sin actividad todavía</span>
   </div>
 </div>
 
 <div class="view" id="viewHistory" style="display:none">
   <div class="empty" id="emptyHistory">
-    <span class="empty-icon">📋</span>
+    <span class="empty-icon">&#128203;</span>
     <span class="empty-text">Sin conversaciones anteriores</span>
   </div>
 </div>
 
 <div class="footer">
   <div class="running-dot" id="runDot"></div>
-  <button class="toggle-btn" id="toggleBtn">▶ Iniciar</button>
+  <button class="toggle-btn" id="toggleBtn">&#9654; Iniciar</button>
+  <button class="clear-btn" id="clearBtn" title="Cancelar prompts y limpiar" disabled>&#128465;</button>
 </div>
 
 <script>
   const vscode = acquireVsCodeApi();
   let isRunning = false;
   let currentTab = 'current';
-
-  // ── State ──
-  // activeConvs: Map<convId|'__anon__', convObj>
-  // convObj: { id, startTime, exchanges:[{prompt,promptTs,response,responseTs}], pendingPrompt:{text,ts}|null }
   let activeConvs = new Map();
-  let history = [];  // archived conversations, newest first
+  let convHistory = [];
 
-  // ── DOM refs ──
   const badge        = document.getElementById('badge');
   const badgeLabel   = document.getElementById('badgeLabel');
-  const serverUrl    = document.getElementById('serverUrl');
+  const serverInput  = document.getElementById('serverInput');
+  const serverSaveBtn= document.getElementById('serverSaveBtn');
   const runDot       = document.getElementById('runDot');
   const toggleBtn    = document.getElementById('toggleBtn');
+  const clearBtn     = document.getElementById('clearBtn');
   const viewCurrent  = document.getElementById('viewCurrent');
   const viewHistory  = document.getElementById('viewHistory');
   const histCount    = document.getElementById('histCount');
   const emptyCurrent = document.getElementById('emptyCurrent');
   const emptyHistory = document.getElementById('emptyHistory');
+  const logPanel     = document.getElementById('logPanel');
+  const logBody      = document.getElementById('logBody');
+  const logErrDot    = document.getElementById('logErrDot');
 
-  const stateLabels = { idle: 'Idle', processing: 'Procesando', success: 'Listo', error: 'Error' };
+  var logLines = [];
+  var MAX_LOG = 80;
+  var stateLabels = { idle: 'Idle', processing: 'Procesando', success: 'Listo', error: 'Error' };
 
-  // ── Tab switching ──
+  function toggleLogPanel() {
+    logPanel.classList.toggle('open');
+    if (logPanel.classList.contains('open')) {
+      logErrDot.classList.remove('visible');
+      logBody.scrollTop = logBody.scrollHeight;
+    }
+  }
+
+  function appendLog(type, text) {
+    var ts = new Date().toLocaleTimeString('es-MX', { hour12: false });
+    var line = document.createElement('div');
+    line.className = 'log-line ' + (type === 'error' ? 'err' : 'info');
+    line.textContent = ts + '  ' + text;
+    line.title = text;
+    logBody.appendChild(line);
+    logLines.push(line);
+    if (logLines.length > MAX_LOG) { logLines.shift().remove(); }
+    if (logPanel.classList.contains('open')) {
+      logBody.scrollTop = logBody.scrollHeight;
+    } else if (type === 'error') {
+      logErrDot.classList.add('visible');
+    }
+  }
+
   function switchTab(tab) {
     currentTab = tab;
     document.getElementById('tabCurrent').className = 'tab' + (tab === 'current' ? ' active' : '');
@@ -315,30 +427,47 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     viewHistory.style.display = tab === 'history' ? 'flex' : 'none';
   }
 
-  // ── Status ──
   function setStatus(state, url, running) {
     isRunning = running;
     badge.className = 'badge ' + state;
     badgeLabel.textContent = stateLabels[state] || state;
-    if (url) { serverUrl.textContent = url; serverUrl.classList.remove('empty'); }
     runDot.className = 'running-dot' + (running ? ' on' : '');
     toggleBtn.className = 'toggle-btn' + (running ? ' stop' : '');
-    toggleBtn.textContent = running ? '⏹ Detener' : '▶ Iniciar';
+    toggleBtn.textContent = running ? '\u23f9 Detener' : '\u25b6 Iniciar';
     toggleBtn.disabled = false;
+    clearBtn.disabled = !running;
   }
 
-  // ── Helpers ──
+  serverInput.addEventListener('input', function() {
+    serverSaveBtn.classList.toggle('visible', serverInput.value.trim() !== '');
+  });
+
+  serverInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { saveServerUrl(); }
+    if (e.key === 'Escape') { serverInput.blur(); }
+  });
+
+  function saveServerUrl() {
+    var url = serverInput.value.trim();
+    while (url.length > 0 && url[url.length - 1] === '/') { url = url.slice(0, -1); }
+    if (!url) { return; }
+    serverSaveBtn.classList.remove('visible');
+    serverSaveBtn.textContent = '\u2713';
+    setTimeout(function() { serverSaveBtn.textContent = 'Guardar'; }, 1500);
+    vscode.postMessage({ command: 'setServerUrl', url: url });
+  }
+
   function trunc(text, max) {
-    return text && text.length > max ? text.slice(0, max) + '…' : (text || '');
+    return text && text.length > max ? text.slice(0, max) + '\u2026' : (text || '');
   }
 
   function makeBubble(cls, label, text, sm) {
-    const div = document.createElement('div');
+    var div = document.createElement('div');
     div.className = 'bubble ' + cls + (sm ? ' sm' : '');
-    const lbl = document.createElement('div');
+    var lbl = document.createElement('div');
     lbl.className = 'bubble-label';
     lbl.textContent = label;
-    const txt = document.createElement('div');
+    var txt = document.createElement('div');
     txt.className = 'bubble-text';
     txt.textContent = text;
     txt.title = text;
@@ -348,15 +477,15 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   }
 
   function makePendingBubble(promptText) {
-    const div = document.createElement('div');
+    var div = document.createElement('div');
     div.className = 'bubble prompt';
-    const lbl = document.createElement('div');
+    var lbl = document.createElement('div');
     lbl.className = 'bubble-label';
     lbl.textContent = 'Prompt';
-    const txt = document.createElement('div');
+    var txt = document.createElement('div');
     txt.className = 'bubble-text';
     txt.textContent = trunc(promptText, 300);
-    const dots = document.createElement('div');
+    var dots = document.createElement('div');
     dots.className = 'pending-dots';
     dots.innerHTML = '<span></span><span></span><span></span>';
     div.appendChild(lbl);
@@ -365,69 +494,102 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     return div;
   }
 
-  // ── Render current view (all active conversations) ──
   function renderCurrentView() {
-    Array.from(viewCurrent.children).forEach(c => { if (c !== emptyCurrent) c.remove(); });
-
-    const hasContent = activeConvs.size > 0;
+    Array.from(viewCurrent.children).forEach(function(c) { if (c !== emptyCurrent) c.remove(); });
+    var hasContent = activeConvs.size > 0;
     emptyCurrent.style.display = hasContent ? 'none' : '';
     if (!hasContent) { return; }
 
-    for (const conv of activeConvs.values()) {
-      // Separator header when multiple conversations active
-      if (activeConvs.size > 1) {
-        const sep = document.createElement('div');
-        sep.style.cssText = 'font-size:9px;opacity:.5;text-transform:uppercase;letter-spacing:.06em;padding:4px 0 2px;border-top:1px solid var(--vscode-panel-border);margin-top:4px;';
-        sep.textContent = conv.id ? conv.id.slice(-12) : 'conv';
-        viewCurrent.appendChild(sep);
-      }
+    activeConvs.forEach(function(conv) {
+      var isProcessing = !!conv.pendingPrompt;
+      var firstPrompt = conv.pendingPrompt ? conv.pendingPrompt.text : (conv.exchanges[0] ? conv.exchanges[0].prompt : '');
 
-      conv.exchanges.forEach(ex => {
-        const wrap = document.createElement('div');
-        wrap.className = 'exchange';
-        wrap.appendChild(makeBubble('prompt',   'Prompt',    trunc(ex.prompt,   400)));
-        wrap.appendChild(makeBubble('response', 'Respuesta', trunc(ex.response, 400)));
-        viewCurrent.appendChild(wrap);
+      var item = document.createElement('div');
+      item.className = 'conv-item open';
+
+      var header = document.createElement('div');
+      header.className = 'conv-item-header';
+
+      var arrow = document.createElement('span');
+      arrow.className = 'conv-arrow';
+      arrow.textContent = '\u25b6';
+
+      var meta = document.createElement('div');
+      meta.className = 'conv-item-meta';
+
+      var timeEl = document.createElement('div');
+      timeEl.className = 'conv-item-time';
+      var timeText = conv.startTime || '';
+      if (conv.id) { timeText = 'ID: ' + conv.id.slice(-12) + '  ' + timeText; }
+      if (conv.modelFamily) { timeText = timeText + '  \u00b7 ' + conv.modelFamily; }
+      timeEl.textContent = timeText;
+
+      var preview = document.createElement('div');
+      preview.className = 'conv-item-preview';
+      preview.textContent = trunc(firstPrompt, 55);
+      preview.title = firstPrompt;
+
+      meta.appendChild(timeEl);
+      meta.appendChild(preview);
+
+      var statusBadge = document.createElement('span');
+      statusBadge.className = 'conv-item-badge ' + (isProcessing ? 'processing' : 'done');
+      statusBadge.textContent = isProcessing ? '\u23f3' : '\u2713';
+
+      header.appendChild(arrow);
+      header.appendChild(meta);
+      header.appendChild(statusBadge);
+      header.addEventListener('click', function() { item.classList.toggle('open'); });
+
+      var body = document.createElement('div');
+      body.className = 'conv-item-body';
+
+      conv.exchanges.forEach(function(ex) {
+        body.appendChild(makeBubble('prompt', 'Prompt', trunc(ex.prompt, 400)));
+        var respCls = 'response' + (ex.isError ? ' error' : '');
+        body.appendChild(makeBubble(respCls, ex.isError ? 'Error' : 'Respuesta', trunc(ex.response, 400)));
       });
 
       if (conv.pendingPrompt) {
-        const wrap = document.createElement('div');
-        wrap.className = 'exchange';
-        wrap.appendChild(makePendingBubble(conv.pendingPrompt.text));
-        viewCurrent.appendChild(wrap);
+        body.appendChild(makePendingBubble(conv.pendingPrompt.text));
       }
-    }
+
+      item.appendChild(header);
+      item.appendChild(body);
+      viewCurrent.appendChild(item);
+    });
 
     viewCurrent.scrollTop = viewCurrent.scrollHeight;
   }
 
-  // ── Render history list ──
   function renderHistoryView() {
-    Array.from(viewHistory.children).forEach(c => { if (c !== emptyHistory) c.remove(); });
-    emptyHistory.style.display = history.length === 0 ? '' : 'none';
+    Array.from(viewHistory.children).forEach(function(c) { if (c !== emptyHistory) c.remove(); });
+    emptyHistory.style.display = convHistory.length === 0 ? '' : 'none';
 
-    history.forEach(conv => {
-      const firstPrompt = conv.exchanges[0] ? conv.exchanges[0].prompt : '';
-      const count = conv.exchanges.length;
+    convHistory.forEach(function(conv) {
+      var firstPrompt = conv.exchanges[0] ? conv.exchanges[0].prompt : '';
+      var count = conv.exchanges.length;
 
-      const item = document.createElement('div');
+      var item = document.createElement('div');
       item.className = 'hist-item';
 
-      const header = document.createElement('div');
+      var header = document.createElement('div');
       header.className = 'hist-item-header';
 
-      const arrow = document.createElement('span');
+      var arrow = document.createElement('span');
       arrow.className = 'hist-arrow';
-      arrow.textContent = '▶';
+      arrow.textContent = '\u25b6';
 
-      const meta = document.createElement('div');
+      var meta = document.createElement('div');
       meta.className = 'hist-item-meta';
 
-      const timeEl = document.createElement('div');
+      var timeEl = document.createElement('div');
       timeEl.className = 'hist-item-time';
-      timeEl.textContent = conv.startTime || '';
+      var timeText = conv.startTime || '';
+      if (conv.modelFamily) { timeText = timeText + '  \u00b7 ' + conv.modelFamily; }
+      timeEl.textContent = timeText;
 
-      const preview = document.createElement('div');
+      var preview = document.createElement('div');
       preview.className = 'hist-item-preview';
       preview.textContent = trunc(firstPrompt, 55);
       preview.title = firstPrompt;
@@ -435,23 +597,21 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
       meta.appendChild(timeEl);
       meta.appendChild(preview);
 
-      const countEl = document.createElement('div');
+      var countEl = document.createElement('div');
       countEl.className = 'hist-item-count';
       countEl.textContent = count + (count === 1 ? ' intercambio' : ' intercambios');
 
       header.appendChild(arrow);
       header.appendChild(meta);
       header.appendChild(countEl);
+      header.addEventListener('click', function() { item.classList.toggle('open'); });
 
-      const body = document.createElement('div');
+      var body = document.createElement('div');
       body.className = 'hist-item-body';
-
-      conv.exchanges.forEach(ex => {
+      conv.exchanges.forEach(function(ex) {
         body.appendChild(makeBubble('prompt',   'P', trunc(ex.prompt,   250), true));
         body.appendChild(makeBubble('response', 'R', trunc(ex.response, 250), true));
       });
-
-      header.addEventListener('click', () => item.classList.toggle('open'));
 
       item.appendChild(header);
       item.appendChild(body);
@@ -460,45 +620,54 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   }
 
   function updateHistBadge() {
-    histCount.textContent = history.length;
-    histCount.className = 'hist-count' + (history.length === 0 ? ' zero' : '');
+    histCount.textContent = convHistory.length;
+    histCount.className = 'hist-count' + (convHistory.length === 0 ? ' zero' : '');
   }
 
-  // ── Conversation management ──
   function archiveConv(convId) {
-    const key = convId || '__anon__';
-    const conv = activeConvs.get(key);
+    var key = convId || '__anon__';
+    var conv = activeConvs.get(key);
     if (conv && conv.exchanges.length > 0) {
-      history.unshift(conv);
+      conv.pendingPrompt = null;
+      convHistory.unshift(conv);
+      if (convHistory.length > 100) { convHistory.length = 100; }
       updateHistBadge();
       renderHistoryView();
+      vscode.postMessage({ command: 'saveHistory', history: convHistory });
     }
     activeConvs.delete(key);
   }
 
-  function handlePrompt(text, timestamp, conversationId, newChat) {
-    const key = conversationId || '__anon__';
-
-    // newChat: archive the existing conv for this key if requested
-    if (newChat && activeConvs.has(key)) {
-      archiveConv(key);
-    }
+  function handlePrompt(text, timestamp, conversationId, newChat, modelFamily) {
+    var key = conversationId || '__anon__';
+    if (newChat && activeConvs.has(key)) { archiveConv(key); }
 
     if (!activeConvs.has(key)) {
-      activeConvs.set(key, { id: conversationId || null, startTime: timestamp, exchanges: [], pendingPrompt: null });
+      if (!newChat && conversationId) {
+        var histIdx = convHistory.findIndex(function(c) { return c.id === conversationId; });
+        if (histIdx !== -1) {
+          var existing = convHistory.splice(histIdx, 1)[0];
+          activeConvs.set(key, existing);
+          updateHistBadge();
+          renderHistoryView();
+        } else {
+          activeConvs.set(key, { id: conversationId, startTime: timestamp, exchanges: [], pendingPrompt: null, modelFamily: modelFamily || null });
+        }
+      } else {
+        activeConvs.set(key, { id: conversationId || null, startTime: timestamp, exchanges: [], pendingPrompt: null, modelFamily: modelFamily || null });
+      }
     }
 
-    const conv = activeConvs.get(key);
-    conv.pendingPrompt = { text, ts: timestamp };
+    var conv = activeConvs.get(key);
+    if (modelFamily) { conv.modelFamily = modelFamily; }
+    conv.pendingPrompt = { text: text, ts: timestamp };
     renderCurrentView();
-
-    // Auto-switch to current tab when a new prompt arrives
     if (currentTab !== 'current') { switchTab('current'); }
   }
 
   function handleResponse(text, timestamp, conversationId) {
-    const key = conversationId || '__anon__';
-    const conv = activeConvs.get(key);
+    var key = conversationId || '__anon__';
+    var conv = activeConvs.get(key);
     if (conv && conv.pendingPrompt) {
       conv.exchanges.push({
         prompt:     conv.pendingPrompt.text,
@@ -509,35 +678,79 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
       conv.pendingPrompt = null;
     }
     renderCurrentView();
-    // Move completed conversation to history after a short delay
-    setTimeout(() => { archiveConv(key); renderCurrentView(); }, 4000);
+    setTimeout(function() { archiveConv(key); renderCurrentView(); }, 4000);
   }
 
-  // ── Model selector ──
-  function onModelChange(family) {
-    vscode.postMessage({ command: 'setModel', family });
+  function handleError(errorText, conversationId) {
+    var key = conversationId || '__anon__';
+    var conv = activeConvs.get(key);
+    if (conv && conv.pendingPrompt) {
+      conv.exchanges.push({
+        prompt:     conv.pendingPrompt.text,
+        promptTs:   conv.pendingPrompt.ts,
+        response:   '\u26a0\ufe0f ' + errorText,
+        responseTs: new Date().toLocaleTimeString('es-MX', { hour12: false }),
+        isError:    true
+      });
+      conv.pendingPrompt = null;
+    }
+    renderCurrentView();
+    setTimeout(function() { archiveConv(key); renderCurrentView(); }, 6000);
   }
 
-  // ── Controls ──
-  toggleBtn.addEventListener('click', () => {
+  toggleBtn.addEventListener('click', function() {
     toggleBtn.disabled = true;
     vscode.postMessage({ command: isRunning ? 'stop' : 'start' });
   });
 
-  // ── Messages from extension host ──
-  window.addEventListener('message', ({ data }) => {
+  clearBtn.addEventListener('click', function() {
+    activeConvs.clear();
+    renderCurrentView();
+    vscode.postMessage({ command: 'clearAll' });
+  });
+
+  window.addEventListener('message', function(event) {
+    var data = event.data;
     if (!data || !data.command) { return; }
+    if (data.command === 'init') {
+      serverInput.value = data.serverUrl || '';
+      if (data.savedHistory && data.savedHistory.length > 0) {
+        convHistory = data.savedHistory;
+        updateHistBadge();
+        renderHistoryView();
+      }
+    }
     if (data.command === 'status') {
       setStatus(data.state, data.serverUrl, data.isRunning);
     }
+    if (data.command === 'clearAllDone') {
+      activeConvs.clear();
+      convHistory = [];
+      updateHistBadge();
+      renderCurrentView();
+      renderHistoryView();
+    }
     if (data.command === 'log') {
+      var wLabel = data.workerId !== undefined ? 'W' + data.workerId + ' ' : '';
       if (data.type === 'prompt') {
-        handlePrompt(data.text, data.timestamp, data.conversationId, data.newChat);
+        var mLabel = data.modelFamily ? ' [' + data.modelFamily + ']' : '';
+        appendLog('info', wLabel + '\u2192' + mLabel + ' [' + (data.conversationId || 'anon') + '] ' + data.text.slice(0, 70));
+        handlePrompt(data.text, data.timestamp, data.conversationId, data.newChat, data.modelFamily);
       } else if (data.type === 'response') {
+        var elLabel = data.elapsed ? ' ' + data.elapsed + 'ms' : '';
+        var chLabel = ' ' + data.text.length + 'c';
+        appendLog('info', wLabel + '\u2190 [' + (data.conversationId || 'anon') + '] OK' + chLabel + elLabel);
         handleResponse(data.text, data.timestamp, data.conversationId);
+      } else if (data.type === 'error') {
+        appendLog('error', wLabel + data.text);
+        handleError(data.text, data.conversationId);
+      } else if (data.type === 'info') {
+        appendLog('info', data.text);
       }
     }
   });
+
+  vscode.postMessage({ command: 'ready' });
 </script>
 </body>
 </html>`;

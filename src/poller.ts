@@ -7,6 +7,9 @@ export type StatusState = 'idle' | 'processing' | 'success' | 'error';
 export interface LogExtra {
   conversationId?: string | null;
   newChat?: boolean;
+  modelFamily?: string;
+  workerId?: number;
+  elapsed?: number;
 }
 
 export interface PollerCallbacks {
@@ -108,13 +111,14 @@ export class Poller {
     if (convId) { this.activeConvIds.add(convId); }
 
     this.cb.onStatus('processing', true);
-    this.cb.onLog('prompt', prompt, { conversationId: convId, newChat: data.newChat });
+    this.cb.onLog('prompt', prompt, { conversationId: convId, newChat: data.newChat, modelFamily: data.modelFamily ?? this.modelFamily, workerId });
 
     const TIMEOUT_MS = 120000;
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('Timeout: el prompt tardó más de 2 minutos')), TIMEOUT_MS)
     );
 
+    const startMs = Date.now();
     let responseText: string;
     try {
       responseText = await Promise.race([
@@ -129,12 +133,14 @@ export class Poller {
       ]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.cb.onLog('error', msg, { conversationId: convId });
+      this.cb.onLog('error', msg, { conversationId: convId, workerId });
       this.cb.onStatus('error', true);
       if (convId) { this.activeConvIds.delete(convId); }
       setTimeout(() => { if (this.active) { this.cb.onStatus('idle', true); } }, 3000);
       return;
     }
+
+    const elapsed = Date.now() - startMs;
 
     await this.client.saveResponse({
       text: responseText,
@@ -143,7 +149,7 @@ export class Poller {
       extractJson: data.extractJson
     });
 
-    this.cb.onLog('response', responseText, { conversationId: convId });
+    this.cb.onLog('response', responseText, { conversationId: convId, workerId, elapsed });
     this.cb.onStatus('success', true);
     if (convId) { this.activeConvIds.delete(convId); }
     setTimeout(() => { if (this.active) { this.cb.onStatus('idle', true); } }, 3000);

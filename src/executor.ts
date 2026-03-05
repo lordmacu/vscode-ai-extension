@@ -63,7 +63,7 @@ export async function executePrompt(
 
   const requestOptions: vscode.LanguageModelChatRequestOptions = {};
   if (justification)              { requestOptions.justification = justification; }
-  if (Object.keys(modelOptions).length) { requestOptions.modelOptions  = modelOptions; }
+  if (modelOptions && Object.keys(modelOptions).length) { requestOptions.modelOptions  = modelOptions; }
 
   const response = await model.sendRequest(messages, requestOptions, cts.token);
 
