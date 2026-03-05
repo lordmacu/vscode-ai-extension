@@ -75,6 +75,10 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
         this._poller?.dispose();
 
         const { serverUrl, apiKey } = this._getConfig();
+        if (!serverUrl) {
+            vscode.window.showWarningMessage('AI Runner: configura la URL del servidor en Settings antes de iniciar.');
+            return;
+        }
 
         this._poller = new Poller(serverUrl, apiKey, {
             onStatus: (state: StatusState, isRunning: boolean) => {
@@ -327,6 +331,19 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   }
   .hist-item.open .hist-item-body { display: flex; }
 
+  /* ── NO CONFIG BANNER ── */
+  .no-config-banner {
+    flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 12px; background: rgba(255,152,0,.12);
+    border-top: 1px solid rgba(255,152,0,.3);
+    font-size: 11px; color: #ffb300; gap: 8px;
+  }
+  .no-config-banner button {
+    font-size: 10px; padding: 2px 8px; border-radius: 3px; border: 1px solid #ffb300;
+    background: none; color: #ffb300; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+  }
+  .no-config-banner button:hover { background: rgba(255,152,0,.15); }
+
   /* ── FOOTER ── */
   .footer {
     flex-shrink: 0; padding: 8px 12px; border-top: 1px solid var(--vscode-panel-border);
@@ -407,9 +424,14 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   </div>
 </div>
 
+<div class="no-config-banner" id="noConfigBanner" style="display:none">
+  <span>&#9888; Configura el servidor antes de iniciar</span>
+  <button onclick="vscode.postMessage({command:'openSettings'})">Abrir Settings</button>
+</div>
+
 <div class="footer">
   <div class="running-dot" id="runDot"></div>
-  <button class="toggle-btn" id="toggleBtn">&#9654; Iniciar</button>
+  <button class="toggle-btn" id="toggleBtn" disabled>&#9654; Iniciar</button>
   <button class="clear-btn" id="clearBtn" title="Cancelar prompts y limpiar" disabled>&#128465;</button>
 </div>
 
@@ -436,9 +458,17 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   const logBody      = document.getElementById('logBody');
   const logErrDot    = document.getElementById('logErrDot');
 
+  var noConfigBanner = document.getElementById('noConfigBanner');
   var logLines = [];
   var MAX_LOG = 80;
   var stateLabels = { idle: 'Idle', processing: 'Procesando', success: 'Listo', error: 'Error', offline: 'Sin conexion' };
+
+  function checkConfig() {
+    var url = serverInput.value.trim();
+    var configured = url.length > 0;
+    noConfigBanner.style.display = configured ? 'none' : 'flex';
+    if (!isRunning) { toggleBtn.disabled = !configured; }
+  }
 
   function toggleLogPanel() {
     logPanel.classList.toggle('open');
@@ -485,6 +515,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
 
   serverInput.addEventListener('input', function() {
     serverSaveBtn.classList.toggle('visible', serverInput.value.trim() !== '');
+    checkConfig();
   });
 
   serverInput.addEventListener('keydown', function(e) {
@@ -810,7 +841,8 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     if (!data || !data.command) { return; }
     if (data.command === 'init') {
       serverInput.value = data.serverUrl || '';
-      serverSaveBtn.classList.remove('visible'); // ya está guardado, ocultar botón
+      serverSaveBtn.classList.remove('visible');
+      checkConfig();
       if (data.savedHistory && data.savedHistory.length > 0) {
         convHistory = data.savedHistory;
         updateHistBadge();
