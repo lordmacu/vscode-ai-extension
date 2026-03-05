@@ -1,0 +1,76 @@
+{
+  "name": "vscode-ai-extension",
+  "publisher": "local-dev",
+  "displayName": "AI Runner",
+  "description": "Polls a server for prompts, executes them via VS Code LM API and returns results",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aiRunnerContainer",
+          "title": "AI Runner",
+          "icon": "images/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "aiRunnerContainer": [
+        {
+          "type": "webview",
+          "id": "aiRunner.panel",
+          "name": "AI Runner"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "aiRunner.start",
+        "title": "AI Runner: Start Polling"
+      },
+      {
+        "command": "aiRunner.stop",
+        "title": "AI Runner: Stop Polling"
+      }
+    ],
+    "configuration": {
+      "title": "AI Runner",
+      "properties": {
+        "aiRunner.serverUrl": {
+          "type": "string",
+          "default": "https://ordenes.finearom.co/ai",
+          "description": "Base URL of the AI prompt server"
+        },
+        "aiRunner.apiKey": {
+          "type": "string",
+          "default": "finearom-ai-2025",
+          "description": "API key for the AI prompt server (X-Api-Key header)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./ --noEmit && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node --target=node18",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies --allow-missing-repository"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "@types/ws": "^8.5.10",
+    "@vscode/vsce": "^2.26.0",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.4.0"
+  }
+}
