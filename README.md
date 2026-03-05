@@ -6,8 +6,6 @@ Polls an **AI Runner Server** for prompts, executes them via the **GitHub Copilo
 
 The extension acts as a bridge: it continuously polls the server for pending prompts, executes them through Copilot, and posts the response back. No prompts are stored in the extension — everything passes through the server.
 
-![End-to-End Flow](images/end-to-end-flow.png)
-
 ```mermaid
 sequenceDiagram
     participant App as Your App
@@ -109,8 +107,6 @@ Collapsible panel showing worker activity in real time:
 
 The **Offline** badge appears when all 3 workers fail to reach the server. Workers retry with exponential backoff (3s → 6s → 12s → … → 60s) and recover automatically.
 
-![Reconnection & Offline Detection](images/reconnection-states.png)
-
 ```mermaid
 stateDiagram-v2
     [*] --> Idle : Start clicked
@@ -129,8 +125,6 @@ stateDiagram-v2
 
 ## How It Works
 
-![VS Code Extension Internal Flow](images/extension-internal-flow.png)
-
 ### Long-polling
 
 Each worker calls `GET /api/prompt/wait`. The server holds the connection open (up to 30s) until a prompt is available, then responds immediately. This delivers prompts with near-zero latency without constant request overhead.
@@ -140,8 +134,6 @@ Worker 0: GET /api/prompt/wait ──► server holds 30s ──► { prompt: ".
 Worker 1: GET /api/prompt/wait ──► server holds 30s ──► { prompt: "", id: null }  (timeout, retry)
 Worker 2: GET /api/prompt/wait ──► server holds 30s ──► { prompt: "...", id: "conv-2" }
 ```
-
-![Parallelism Model](images/parallelism-model.png)
 
 ### Conversation Threading
 
