@@ -46,6 +46,20 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
                 }
             }
         });
+
+        // Sincronizar el panel cuando el usuario cambia settings en VS Code
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('aiRunner.serverUrl') || e.affectsConfiguration('aiRunner.apiKey')) {
+                const { serverUrl } = this._getConfig();
+                this._post({ command: 'init', serverUrl, savedHistory: null });
+                // Si estaba corriendo, reiniciar con las nuevas credenciales
+                if (this._poller?.running) {
+                    this._poller.dispose();
+                    this._poller = undefined;
+                    this._startPoller();
+                }
+            }
+        });
     }
 
     private _getConfig() {
@@ -139,7 +153,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   .title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; opacity: .8; }
   .settings-btn {
     background: none; border: none; cursor: pointer; padding: 3px 5px; border-radius: 3px;
-    color: var(--vscode-descriptionForeground); font-size: 13px; line-height: 1; opacity: .6;
+    color: var(--vscode-descriptionForeground); font-size: 18px; line-height: 1; opacity: .6;
     transition: opacity .15s, background .15s; flex-shrink: 0;
   }
   .settings-btn:hover { opacity: 1; background: var(--vscode-list-hoverBackground); }
@@ -796,6 +810,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     if (!data || !data.command) { return; }
     if (data.command === 'init') {
       serverInput.value = data.serverUrl || '';
+      serverSaveBtn.classList.remove('visible'); // ya está guardado, ocultar botón
       if (data.savedHistory && data.savedHistory.length > 0) {
         convHistory = data.savedHistory;
         updateHistBadge();
