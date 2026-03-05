@@ -31,6 +31,9 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
                 const entries = (msg.history || []).slice(0, 100);
                 await this._context.globalState.update('aiRunnerHistory', entries);
             }
+            else if (msg.command === 'openSettings') {
+                vscode.commands.executeCommand('workbench.action.openSettings', 'aiRunner');
+            }
             else if (msg.command === 'setServerUrl') {
                 let url = (msg.url || '').trim();
                 while (url.endsWith('/')) { url = url.slice(0, -1); }
@@ -48,8 +51,8 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     private _getConfig() {
         const cfg = vscode.workspace.getConfiguration('aiRunner');
         return {
-            serverUrl: cfg.get<string>('serverUrl', 'https://ordenes.finearom.co/ai'),
-            apiKey:    cfg.get<string>('apiKey', 'finearom-ai-2025')
+            serverUrl: cfg.get<string>('serverUrl', ''),
+            apiKey:    cfg.get<string>('apiKey', '')
         };
     }
 
@@ -134,6 +137,12 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   .header { flex-shrink: 0; padding: 10px 12px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
   .header-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
   .title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; opacity: .8; }
+  .settings-btn {
+    background: none; border: none; cursor: pointer; padding: 3px 5px; border-radius: 3px;
+    color: var(--vscode-descriptionForeground); font-size: 13px; line-height: 1; opacity: .6;
+    transition: opacity .15s, background .15s; flex-shrink: 0;
+  }
+  .settings-btn:hover { opacity: 1; background: var(--vscode-list-hoverBackground); }
   .badge {
     display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 10px;
     font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
@@ -338,7 +347,10 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
 <div class="header">
   <div class="header-top">
     <span class="title">AI Runner</span>
-    <div class="badge idle" id="badge"><span class="dot"></span><span id="badgeLabel">Idle</span></div>
+    <div style="display:flex;align-items:center;gap:6px">
+      <div class="badge idle" id="badge"><span class="dot"></span><span id="badgeLabel">Idle</span></div>
+      <button class="settings-btn" onclick="vscode.postMessage({command:'openSettings'})" title="Configuracion">&#9881;</button>
+    </div>
   </div>
   <div class="server-row">
     <span class="server-label">Server:</span>

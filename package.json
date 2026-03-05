@@ -46,12 +46,12 @@
       "properties": {
         "aiRunner.serverUrl": {
           "type": "string",
-          "default": "https://ordenes.finearom.co/ai",
-          "description": "Base URL of the AI prompt server"
+          "default": "",
+          "description": "Base URL of the AI prompt server (ej: https://mi-servidor.com/ai)"
         },
         "aiRunner.apiKey": {
           "type": "string",
-          "default": "finearom-ai-2025",
+          "default": "",
           "description": "API key for the AI prompt server (X-Api-Key header)"
         },
         "aiRunner.timeoutSeconds": {
