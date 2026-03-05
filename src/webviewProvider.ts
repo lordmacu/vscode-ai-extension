@@ -5,6 +5,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'aiRunner.panel';
     private _view?: vscode.WebviewView;
     private _poller?: Poller;
+    private _lastNotifTime = 0;
 
     constructor(private readonly _context: vscode.ExtensionContext) {}
 
@@ -63,6 +64,13 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
                 this._post({ command: 'status', state, serverUrl, isRunning });
             },
             onLog: (type, text, extra) => {
+                if (type === 'prompt' && !this._view?.visible) {
+                    const now = Date.now();
+                    if (now - this._lastNotifTime > 30000) {
+                        this._lastNotifTime = now;
+                        vscode.window.showInformationMessage(`AI Runner: nuevo prompt recibido`);
+                    }
+                }
                 this._post({
                     command: 'log',
                     type,
@@ -222,7 +230,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
 
   /* ── BUBBLES ── */
   .exchange { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
-  .bubble { border-radius: 4px; padding: 6px 8px; border-left: 2px solid transparent; }
+  .bubble { border-radius: 4px; padding: 6px 8px; border-left: 2px solid transparent; position: relative; }
   .bubble.sm { padding: 4px 7px; }
   .bubble-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 3px; opacity: .7; }
   .bubble-text { font-size: 11.5px; line-height: 1.45; word-break: break-word; }
@@ -235,6 +243,14 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   .bubble.response .bubble-text  { opacity: .85; }
   .bubble.response.error { background: rgba(229,83,75,.08); border-left-color: #f48771; }
   .bubble.response.error .bubble-label { color: #f48771; }
+  .bubble-copy {
+    position: absolute; top: 5px; right: 6px;
+    background: none; border: none; cursor: pointer; padding: 2px 5px;
+    border-radius: 3px; font-size: 11px; opacity: 0; transition: opacity .15s;
+    color: var(--vscode-descriptionForeground); line-height: 1;
+  }
+  .bubble:hover .bubble-copy { opacity: .6; }
+  .bubble-copy:hover { opacity: 1 !important; background: var(--vscode-list-hoverBackground); }
 
   /* ── PENDING ANIMATION ── */
   .pending-dots { display: inline-flex; gap: 3px; align-items: center; margin-top: 4px; }
@@ -464,7 +480,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     return text && text.length > max ? text.slice(0, max) + '\u2026' : (text || '');
   }
 
-  function makeBubble(cls, label, text, sm) {
+  function makeBubble(cls, label, text, sm, copyText) {
     var div = document.createElement('div');
     div.className = 'bubble ' + cls + (sm ? ' sm' : '');
     var lbl = document.createElement('div');
@@ -476,6 +492,20 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     txt.title = text;
     div.appendChild(lbl);
     div.appendChild(txt);
+    if (copyText) {
+      var btn = document.createElement('button');
+      btn.className = 'bubble-copy';
+      btn.textContent = '\u29c9';
+      btn.title = 'Copiar';
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        navigator.clipboard.writeText(copyText).then(function() {
+          btn.textContent = '\u2713';
+          setTimeout(function() { btn.textContent = '\u29c9'; }, 1500);
+        });
+      });
+      div.appendChild(btn);
+    }
     return div;
   }
 
@@ -548,9 +578,9 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
       body.className = 'conv-item-body';
 
       conv.exchanges.forEach(function(ex) {
-        body.appendChild(makeBubble('prompt', 'Prompt', trunc(ex.prompt, 400)));
+        body.appendChild(makeBubble('prompt', 'Prompt', trunc(ex.prompt, 400), false, ex.prompt));
         var respCls = 'response' + (ex.isError ? ' error' : '');
-        body.appendChild(makeBubble(respCls, ex.isError ? 'Error' : 'Respuesta', trunc(ex.response, 400)));
+        body.appendChild(makeBubble(respCls, ex.isError ? 'Error' : 'Respuesta', trunc(ex.response, 400), false, ex.response));
       });
 
       if (conv.pendingPrompt) {
@@ -609,8 +639,8 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     body.className = 'hist-item-body';
     conv.exchanges.forEach(function(ex) {
       var elLabel = ex.elapsed ? ' ' + ex.elapsed + 'ms' : '';
-      body.appendChild(makeBubble('prompt',   'P', trunc(ex.prompt,   250), true));
-      body.appendChild(makeBubble('response', 'R' + elLabel, trunc(ex.response, 250), true));
+      body.appendChild(makeBubble('prompt',   'P', trunc(ex.prompt,   250), true, ex.prompt));
+      body.appendChild(makeBubble('response', 'R' + elLabel, trunc(ex.response, 250), true, ex.response));
     });
 
     item.appendChild(header);

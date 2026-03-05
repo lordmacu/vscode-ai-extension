@@ -3,6 +3,13 @@ import * as vscode from 'vscode';
 // Historial de conversaciones: conversationId → mensajes acumulados
 const history = new Map<string, vscode.LanguageModelChatMessage[]>();
 
+// CancellationTokenSources activos — para cancelar prompts en progreso
+const activeCts = new Set<vscode.CancellationTokenSource>();
+
+export function cancelAllPrompts() {
+  activeCts.forEach(cts => cts.cancel());
+}
+
 export interface ExecuteOptions {
   modelFamily?: string;
   justification?: string;
@@ -60,18 +67,23 @@ export async function executePrompt(
   }
 
   const cts = new vscode.CancellationTokenSource();
+  activeCts.add(cts);
 
   const requestOptions: vscode.LanguageModelChatRequestOptions = {};
   if (justification)              { requestOptions.justification = justification; }
   if (modelOptions && Object.keys(modelOptions).length) { requestOptions.modelOptions  = modelOptions; }
 
-  const response = await model.sendRequest(messages, requestOptions, cts.token);
-
   let fullText = '';
-  for await (const chunk of response.text) {
-    fullText += chunk;
+  try {
+    const response = await model.sendRequest(messages, requestOptions, cts.token);
+    for await (const chunk of response.text) {
+      if (cts.token.isCancellationRequested) { throw new Error('__cancelled__'); }
+      fullText += chunk;
+    }
+  } finally {
+    activeCts.delete(cts);
+    cts.dispose();
   }
-  cts.dispose();
 
   messages.push(vscode.LanguageModelChatMessage.Assistant(fullText));
   history.set(key, messages);

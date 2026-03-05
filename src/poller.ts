@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { ServerClient } from './serverClient';
-import { executePrompt } from './executor';
+import { executePrompt, cancelAllPrompts } from './executor';
 
 export type StatusState = 'idle' | 'processing' | 'success' | 'error' | 'offline';
 
@@ -56,6 +56,7 @@ export class Poller {
   }
 
   stop() {
+    cancelAllPrompts();
     this.active = false;
     this.clearReconnect();
     if (this.ws) {
@@ -155,10 +156,12 @@ export class Poller {
         timeout
       ]);
     } catch (err) {
+      if (convId) { this.activeConvIds.delete(convId); }
+      if (!this.active) { return; } // detenido — ignorar error de cancelación
       const msg = err instanceof Error ? err.message : String(err);
+      if (msg === '__cancelled__') { return; }
       this.cb.onLog('error', msg, { conversationId: convId, workerId });
       this.cb.onStatus('error', true);
-      if (convId) { this.activeConvIds.delete(convId); }
       setTimeout(() => { if (this.active) { this.cb.onStatus('idle', true); } }, 3000);
       return;
     }
