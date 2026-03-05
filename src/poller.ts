@@ -44,7 +44,7 @@ export class Poller {
     if (this.active) { return; }
     this.active = true;
     this.cb.onStatus('idle', true);
-    this.cb.onLog('info', `Iniciando ${WORKER_COUNT} workers → ${this.serverUrl}`);
+    this.cb.onLog('info', `Starting ${WORKER_COUNT} workers → ${this.serverUrl}`);
 
     // Conectar WebSocket solo para recibir actualizaciones de estado
     this.connectWs();
@@ -64,7 +64,7 @@ export class Poller {
       this.ws = null;
     }
     this.cb.onStatus('idle', false);
-    this.cb.onLog('info', 'Workers detenidos');
+    this.cb.onLog('info', 'Workers stopped');
   }
 
   dispose() { this.stop(); }
@@ -82,7 +82,7 @@ export class Poller {
           this.failedWorkers.delete(workerId);
           if (this.reportedOffline) {
             this.reportedOffline = false;
-            this.cb.onLog('info', 'Servidor reconectado');
+            this.cb.onLog('info', 'Server reconnected');
             this.cb.onStatus('idle', true);
           }
         }
@@ -139,7 +139,7 @@ export class Poller {
     this.cb.onLog('prompt', prompt, { conversationId: convId, newChat: data.newChat, modelFamily: data.modelFamily ?? this.modelFamily, workerId });
 
     const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Timeout: el prompt tardó más de ${Math.round(this.timeoutMs / 1000)}s`)), this.timeoutMs)
+      setTimeout(() => reject(new Error(`Timeout: prompt took more than ${Math.round(this.timeoutMs / 1000)}s`)), this.timeoutMs)
     );
 
     const startMs = Date.now();
@@ -196,7 +196,7 @@ export class Poller {
     }
 
     socket.on('open', () => {
-      this.cb.onLog('info', 'WebSocket conectado (estado)');
+      this.cb.onLog('info', 'WebSocket connected');
     });
 
     socket.on('message', (raw: WebSocket.RawData) => {

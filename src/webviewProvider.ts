@@ -76,7 +76,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
 
         const { serverUrl, apiKey } = this._getConfig();
         if (!serverUrl) {
-            vscode.window.showWarningMessage('AI Runner: configura la URL del servidor en Settings antes de iniciar.');
+            vscode.window.showWarningMessage('AI Runner: configure server URL in Settings before starting.');
             return;
         }
 
@@ -89,7 +89,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
                     const now = Date.now();
                     if (now - this._lastNotifTime > 30000) {
                         this._lastNotifTime = now;
-                        vscode.window.showInformationMessage(`AI Runner: nuevo prompt recibido`);
+                        vscode.window.showInformationMessage(`AI Runner: new prompt received`);
                     }
                 }
                 this._post({
@@ -324,6 +324,13 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   .hist-item-time { font-size: 10px; color: var(--vscode-descriptionForeground); opacity: .7; }
   .hist-item-preview { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .9; }
   .hist-item-count { font-size: 10px; color: var(--vscode-descriptionForeground); flex-shrink: 0; opacity: .6; }
+  .hist-copy-btn {
+    background: none; border: none; cursor: pointer; padding: 2px 5px;
+    border-radius: 3px; font-size: 12px; opacity: 0; transition: opacity .15s;
+    color: var(--vscode-descriptionForeground); line-height: 1; flex-shrink: 0;
+  }
+  .hist-item-header:hover .hist-copy-btn { opacity: .6; }
+  .hist-copy-btn:hover { opacity: 1 !important; background: var(--vscode-list-hoverBackground); }
   .hist-item-body {
     display: none; padding: 6px 8px;
     border-top: 1px solid var(--vscode-panel-border);
@@ -380,17 +387,17 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     <span class="title">AI Runner</span>
     <div style="display:flex;align-items:center;gap:6px">
       <div class="badge idle" id="badge"><span class="dot"></span><span id="badgeLabel">Idle</span></div>
-      <button class="settings-btn" onclick="vscode.postMessage({command:'openSettings'})" title="Configuracion">&#9881;</button>
+      <button class="settings-btn" onclick="vscode.postMessage({command:'openSettings'})" title="Settings">&#9881;</button>
     </div>
   </div>
   <div class="server-row">
     <span class="server-label">Server:</span>
     <input class="server-input" id="serverInput" type="text" placeholder="https://..." spellcheck="false" />
-    <button class="server-save-btn" id="serverSaveBtn" onclick="saveServerUrl()">Guardar</button>
+    <button class="server-save-btn" id="serverSaveBtn" onclick="saveServerUrl()">Save</button>
   </div>
   <div class="server-row" style="margin-bottom:0">
     <span class="server-label">Model:</span>
-    <span class="model-hint">por peticion (default: gpt-4.1)</span>
+    <span class="model-hint">per request (default: gpt-4.1)</span>
   </div>
 </div>
 
@@ -404,35 +411,35 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
 </div>
 
 <div class="tabs">
-  <button class="tab active" id="tabCurrent" onclick="switchTab('current')">Actual</button>
+  <button class="tab active" id="tabCurrent" onclick="switchTab('current')">Current</button>
   <button class="tab" id="tabHistory" onclick="switchTab('history')">
-    Historial <span class="hist-count zero" id="histCount">0</span>
+    History <span class="hist-count zero" id="histCount">0</span>
   </button>
 </div>
 
 <div class="view" id="viewCurrent">
   <div class="empty" id="emptyCurrent">
     <span class="empty-icon">&#9678;</span>
-    <span class="empty-text">Sin actividad todavía</span>
+    <span class="empty-text">No activity yet</span>
   </div>
 </div>
 
 <div class="view" id="viewHistory" style="display:none">
   <div class="empty" id="emptyHistory">
     <span class="empty-icon">&#128203;</span>
-    <span class="empty-text">Sin conversaciones anteriores</span>
+    <span class="empty-text">No previous conversations</span>
   </div>
 </div>
 
 <div class="no-config-banner" id="noConfigBanner" style="display:none">
-  <span>&#9888; Configura el servidor antes de iniciar</span>
-  <button onclick="vscode.postMessage({command:'openSettings'})">Abrir Settings</button>
+  <span>&#9888; Configure server URL before starting</span>
+  <button onclick="vscode.postMessage({command:'openSettings'})">Open Settings</button>
 </div>
 
 <div class="footer">
   <div class="running-dot" id="runDot"></div>
-  <button class="toggle-btn" id="toggleBtn" disabled>&#9654; Iniciar</button>
-  <button class="clear-btn" id="clearBtn" title="Cancelar prompts y limpiar" disabled>&#128465;</button>
+  <button class="toggle-btn" id="toggleBtn" disabled>&#9654; Start</button>
+  <button class="clear-btn" id="clearBtn" title="Cancel prompts and clear" disabled>&#128465;</button>
 </div>
 
 <script>
@@ -461,7 +468,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   var noConfigBanner = document.getElementById('noConfigBanner');
   var logLines = [];
   var MAX_LOG = 80;
-  var stateLabels = { idle: 'Idle', processing: 'Procesando', success: 'Listo', error: 'Error', offline: 'Sin conexion' };
+  var stateLabels = { idle: 'Idle', processing: 'Processing', success: 'Done', error: 'Error', offline: 'Offline' };
 
   function checkConfig() {
     var url = serverInput.value.trim();
@@ -508,7 +515,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     badgeLabel.textContent = stateLabels[state] || state;
     runDot.className = 'running-dot' + (running ? ' on' : '');
     toggleBtn.className = 'toggle-btn' + (running ? ' stop' : '');
-    toggleBtn.textContent = running ? '\u23f9 Detener' : '\u25b6 Iniciar';
+    toggleBtn.textContent = running ? '\u23f9 Stop' : '\u25b6 Start';
     toggleBtn.disabled = false;
     clearBtn.disabled = !running;
   }
@@ -529,7 +536,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     if (!url) { return; }
     serverSaveBtn.classList.remove('visible');
     serverSaveBtn.textContent = '\u2713';
-    setTimeout(function() { serverSaveBtn.textContent = 'Guardar'; }, 1500);
+    setTimeout(function() { serverSaveBtn.textContent = 'Save'; }, 1500);
     vscode.postMessage({ command: 'setServerUrl', url: url });
   }
 
@@ -637,7 +644,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
       conv.exchanges.forEach(function(ex) {
         body.appendChild(makeBubble('prompt', 'Prompt', trunc(ex.prompt, 400), false, ex.prompt));
         var respCls = 'response' + (ex.isError ? ' error' : '');
-        body.appendChild(makeBubble(respCls, ex.isError ? 'Error' : 'Respuesta', trunc(ex.response, 400), false, ex.response));
+        body.appendChild(makeBubble(respCls, ex.isError ? 'Error' : 'Response', trunc(ex.response, 400), false, ex.response));
       });
 
       if (conv.pendingPrompt) {
@@ -685,11 +692,29 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
 
     var countEl = document.createElement('div');
     countEl.className = 'hist-item-count';
-    countEl.textContent = count + (count === 1 ? ' intercambio' : ' intercambios');
+    countEl.textContent = count + (count === 1 ? ' exchange' : ' exchanges');
+
+    var copyConvBtn = document.createElement('button');
+    copyConvBtn.className = 'hist-copy-btn';
+    copyConvBtn.textContent = '\u29c9';
+    copyConvBtn.title = 'Copy full conversation';
+    copyConvBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var text = (conv.startTime || '') + (conv.modelFamily ? '  \u00b7 ' + conv.modelFamily : '') + '\\n\\n';
+      text += conv.exchanges.map(function(ex) {
+        var elapsed2 = ex.elapsed ? ' (' + ex.elapsed + 'ms)' : '';
+        return 'Prompt:\\n' + (ex.prompt || '') + '\\n\\nResponse' + elapsed2 + ':\\n' + (ex.response || '');
+      }).join('\\n\\n---\\n\\n');
+      navigator.clipboard.writeText(text).then(function() {
+        copyConvBtn.textContent = '\u2713';
+        setTimeout(function() { copyConvBtn.textContent = '\u29c9'; }, 1500);
+      });
+    });
 
     header.appendChild(arrow);
     header.appendChild(meta);
     header.appendChild(countEl);
+    header.appendChild(copyConvBtn);
     header.addEventListener('click', function() { item.classList.toggle('open'); });
 
     var body = document.createElement('div');
