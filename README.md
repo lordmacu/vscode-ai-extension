@@ -4,19 +4,25 @@ Polls an **AI Runner Server** for prompts, executes them via the **GitHub Copilo
 
 ## Architecture
 
-```
-Your App / Postman / Laravel
-        |
-        | POST /v1/chat/completions  (OpenAI-compatible)
-        v
-   AI Runner Server  ──────────────────────►  VS Code Extension
-   (Node.js)           long-poll              (GitHub Copilot LM API)
-        ▲                                             |
-        └─────────────────────────────────────────────┘
-                  POST /api/save  (response)
-```
-
 The extension acts as a bridge: it continuously polls the server for pending prompts, executes them through Copilot, and posts the response back. No prompts are stored in the extension — everything passes through the server.
+
+![End-to-End Flow](images/end-to-end-flow.png)
+
+```mermaid
+sequenceDiagram
+    participant App as Your App
+    participant Server as AI Runner Server
+    participant Worker as VS Code Worker
+    participant Copilot as GitHub Copilot
+
+    App->>Server: POST /v1/chat/completions
+    Worker->>Server: GET /api/prompt/wait
+    Server-->>Worker: prompt + convId
+    Worker->>Copilot: sendRequest
+    Copilot-->>Worker: response
+    Worker->>Server: POST /api/save
+    Server-->>App: 200 response
+```
 
 ---
 
@@ -24,7 +30,7 @@ The extension acts as a bridge: it continuously polls the server for pending pro
 
 - **VS Code** 1.90+
 - **GitHub Copilot** active subscription (signed in to GitHub in VS Code)
-- **AI Runner Server** running and reachable — see [aiextension-server](https://github.com/lordmacu/aiextension-server)
+- **AI Runner Server** running and reachable — **[aiextension-server →](https://github.com/lordmacu/aiextension-server)**
 
 ---
 
@@ -103,9 +109,27 @@ Collapsible panel showing worker activity in real time:
 
 The **Offline** badge appears when all 3 workers fail to reach the server. Workers retry with exponential backoff (3s → 6s → 12s → … → 60s) and recover automatically.
 
+![Reconnection & Offline Detection](images/reconnection-states.png)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle : Start clicked
+    Idle --> Processing : prompt received
+    Processing --> Done : response saved
+    Done --> Idle : 3s delay
+    Processing --> Error : Copilot failed / timeout
+    Error --> Idle : 3s delay
+    Idle --> Offline : all 3 workers fail
+    Offline --> Idle : any worker reconnects
+    Idle --> [*] : Stop clicked
+    Processing --> [*] : Stop clicked
+```
+
 ---
 
 ## How It Works
+
+![VS Code Extension Internal Flow](images/extension-internal-flow.png)
 
 ### Long-polling
 
@@ -116,6 +140,8 @@ Worker 0: GET /api/prompt/wait ──► server holds 30s ──► { prompt: ".
 Worker 1: GET /api/prompt/wait ──► server holds 30s ──► { prompt: "", id: null }  (timeout, retry)
 Worker 2: GET /api/prompt/wait ──► server holds 30s ──► { prompt: "...", id: "conv-2" }
 ```
+
+![Parallelism Model](images/parallelism-model.png)
 
 ### Conversation Threading
 
@@ -167,14 +193,14 @@ The extension only uses two server endpoints:
 }
 ```
 
-For full server API documentation (OpenAI-compatible endpoint, admin routes, Docker setup), see the [AI Runner Server README](https://github.com/lordmacu/aiextension-server).
+For full server API documentation (OpenAI-compatible endpoint, admin routes, Docker setup), see the **[AI Runner Server →](https://github.com/lordmacu/aiextension-server)**.
 
 ---
 
 ## Troubleshooting
 
 **Start button is disabled**
-`aiRunner.serverUrl` is not configured. Click ⚙ in the panel header to open Settings.
+`aiRunner.serverUrl` is not configured. Both `serverUrl` and `apiKey` must be set before the Start button becomes available. Click ⚙ in the panel header to open Settings directly.
 
 **Badge stays "Offline"**
 The server is unreachable. Check that the server is running and the URL is correct. Workers retry automatically — no need to stop and restart.
