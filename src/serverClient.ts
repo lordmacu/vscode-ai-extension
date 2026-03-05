@@ -9,6 +9,7 @@ export interface PromptData {
   modelOptions?: Record<string, any>;
   systemPrompt?: string;
   maxInputTokens?: number;
+  images?: string[]; // base64 data URLs: "data:image/png;base64,..."
 }
 
 export interface SavePayload {

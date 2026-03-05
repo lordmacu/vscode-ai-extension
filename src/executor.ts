@@ -16,6 +16,7 @@ export interface ExecuteOptions {
   modelOptions?: Record<string, any>;
   systemPrompt?: string;
   maxInputTokens?: number; // truncar historial si supera este límite
+  images?: string[];       // base64 data URLs adjuntas al mensaje del usuario
 }
 
 export async function executePrompt(
@@ -30,6 +31,7 @@ export async function executePrompt(
     modelOptions = {},
     systemPrompt,
     maxInputTokens,
+    images = [],
   } = options;
 
   // Seleccionar modelo con fallbacks
@@ -59,7 +61,16 @@ export async function executePrompt(
     messages.push(vscode.LanguageModelChatMessage.Assistant('Entendido.'));
   }
 
-  messages.push(vscode.LanguageModelChatMessage.User(prompt));
+  const userParts: (vscode.LanguageModelTextPart | vscode.LanguageModelDataPart)[] = [
+    new vscode.LanguageModelTextPart(prompt),
+    ...images.map(url => {
+      const match = url.match(/^data:(image\/\w+);base64,(.+)$/);
+      const mime = (match?.[1] ?? 'image/png') as `image/${string}`;
+      const bytes = Buffer.from(match?.[2] ?? url, 'base64');
+      return new vscode.LanguageModelDataPart(bytes, mime);
+    }),
+  ];
+  messages.push(vscode.LanguageModelChatMessage.User(userParts));
 
   // Truncar historial si supera el límite de tokens
   if (maxInputTokens && messages.length > 2) {

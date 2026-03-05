@@ -125,6 +125,7 @@ export class Poller {
     modelOptions?: Record<string, any>;
     systemPrompt?: string;
     maxInputTokens?: number;
+    images?: string[];
   }, workerId: number) {
     const prompt = (data.prompt || '').trim();
     const convId = data.id;
@@ -152,6 +153,7 @@ export class Poller {
           modelOptions:   data.modelOptions,
           systemPrompt:   data.systemPrompt,
           maxInputTokens: data.maxInputTokens,
+          images:         data.images,
         }),
         timeout
       ]);
