@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { ServerClient } from './serverClient';
 import { executePrompt } from './executor';
 
-export type StatusState = 'idle' | 'processing' | 'success' | 'error';
+export type StatusState = 'idle' | 'processing' | 'success' | 'error' | 'offline';
 
 export interface LogExtra {
   conversationId?: string | null;
@@ -26,6 +26,9 @@ export class Poller {
   private client: ServerClient;
   private activeConvIds = new Set<string>(); // guard de deduplicación
   public modelFamily: string = 'gpt-4.1';
+  public timeoutMs: number = 120000;
+  private failedWorkers = new Set<number>();
+  private reportedOffline = false;
 
   constructor(
     private serverUrl: string,
@@ -67,10 +70,22 @@ export class Poller {
 
   // ─── Worker loop ─────────────────────────────────────────────────────────────
   private async runWorker(workerId: number) {
+    let backoff = 3000;
     while (this.active) {
       try {
         const data = await this.client.waitForPrompt();
         if (!this.active) { break; }
+
+        // Conexión exitosa — resetear estado de falla
+        if (this.failedWorkers.has(workerId)) {
+          this.failedWorkers.delete(workerId);
+          if (this.reportedOffline) {
+            this.reportedOffline = false;
+            this.cb.onLog('info', 'Servidor reconectado');
+            this.cb.onStatus('idle', true);
+          }
+        }
+        backoff = 3000;
 
         const prompt = (data.prompt || '').trim();
         if (!prompt) { continue; } // timeout del servidor — volver a esperar
@@ -78,12 +93,21 @@ export class Poller {
         await this.handlePrompt(data, workerId);
       } catch (err) {
         if (!this.active) { break; }
-        // Error de red — esperar un poco antes de reintentar
         const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes('ECONNREFUSED') && !msg.includes('ENOTFOUND') && !msg.includes('timeout')) {
+        const isNetErr = msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') ||
+                         msg.includes('timeout') || msg.includes('AbortError') ||
+                         msg.toLowerCase().includes('aborted') || msg.includes('fetch failed');
+        if (!isNetErr) {
           this.cb.onLog('error', `Worker ${workerId}: ${msg}`);
         }
-        await this.sleep(3000);
+        // Detección de offline: cuando todos los workers fallan
+        this.failedWorkers.add(workerId);
+        if (!this.reportedOffline && this.failedWorkers.size >= WORKER_COUNT) {
+          this.reportedOffline = true;
+          this.cb.onStatus('offline', true);
+        }
+        await this.sleep(backoff);
+        backoff = Math.min(backoff * 2, 60000); // 3s → 6s → 12s → ... → 60s
       }
     }
   }
@@ -113,9 +137,8 @@ export class Poller {
     this.cb.onStatus('processing', true);
     this.cb.onLog('prompt', prompt, { conversationId: convId, newChat: data.newChat, modelFamily: data.modelFamily ?? this.modelFamily, workerId });
 
-    const TIMEOUT_MS = 120000;
     const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Timeout: el prompt tardó más de 2 minutos')), TIMEOUT_MS)
+      setTimeout(() => reject(new Error(`Timeout: el prompt tardó más de ${Math.round(this.timeoutMs / 1000)}s`)), this.timeoutMs)
     );
 
     const startMs = Date.now();

@@ -77,6 +77,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
             }
         });
         this._poller.modelFamily = 'gpt-4.1';
+        this._poller.timeoutMs = vscode.workspace.getConfiguration('aiRunner').get<number>('timeoutSeconds', 120) * 1000;
         this._poller.start();
     }
 
@@ -138,6 +139,8 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
   .badge.success .dot { background: #4caf50; }
   .badge.error      { background: rgba(229,83,75,.15); color: #f48771; }
   .badge.error .dot { background: #f48771; }
+  .badge.offline      { background: rgba(255,152,0,.15); color: #ffb300; }
+  .badge.offline .dot { background: #ffb300; animation: pulse 2s ease-in-out infinite; }
   @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.7)} }
   .server-row { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
   .server-label { font-size: 10px; color: var(--vscode-descriptionForeground); flex-shrink: 0; }
@@ -393,7 +396,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
 
   var logLines = [];
   var MAX_LOG = 80;
-  var stateLabels = { idle: 'Idle', processing: 'Procesando', success: 'Listo', error: 'Error' };
+  var stateLabels = { idle: 'Idle', processing: 'Procesando', success: 'Listo', error: 'Error', offline: 'Sin conexion' };
 
   function toggleLogPanel() {
     logPanel.classList.toggle('open');
@@ -562,61 +565,71 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     viewCurrent.scrollTop = viewCurrent.scrollHeight;
   }
 
+  function makeHistItem(conv) {
+    var firstPrompt = conv.exchanges[0] ? conv.exchanges[0].prompt : '';
+    var count = conv.exchanges.length;
+
+    var item = document.createElement('div');
+    item.className = 'hist-item';
+
+    var header = document.createElement('div');
+    header.className = 'hist-item-header';
+
+    var arrow = document.createElement('span');
+    arrow.className = 'hist-arrow';
+    arrow.textContent = '\u25b6';
+
+    var meta = document.createElement('div');
+    meta.className = 'hist-item-meta';
+
+    var timeEl = document.createElement('div');
+    timeEl.className = 'hist-item-time';
+    var timeText = conv.startTime || '';
+    if (conv.modelFamily) { timeText = timeText + '  \u00b7 ' + conv.modelFamily; }
+    timeEl.textContent = timeText;
+
+    var preview = document.createElement('div');
+    preview.className = 'hist-item-preview';
+    preview.textContent = trunc(firstPrompt, 55);
+    preview.title = firstPrompt || '';
+
+    meta.appendChild(timeEl);
+    meta.appendChild(preview);
+
+    var countEl = document.createElement('div');
+    countEl.className = 'hist-item-count';
+    countEl.textContent = count + (count === 1 ? ' intercambio' : ' intercambios');
+
+    header.appendChild(arrow);
+    header.appendChild(meta);
+    header.appendChild(countEl);
+    header.addEventListener('click', function() { item.classList.toggle('open'); });
+
+    var body = document.createElement('div');
+    body.className = 'hist-item-body';
+    conv.exchanges.forEach(function(ex) {
+      var elLabel = ex.elapsed ? ' ' + ex.elapsed + 'ms' : '';
+      body.appendChild(makeBubble('prompt',   'P', trunc(ex.prompt,   250), true));
+      body.appendChild(makeBubble('response', 'R' + elLabel, trunc(ex.response, 250), true));
+    });
+
+    item.appendChild(header);
+    item.appendChild(body);
+    return item;
+  }
+
+  function prependHistoryItem(conv) {
+    emptyHistory.style.display = 'none';
+    var item = makeHistItem(conv);
+    var first = viewHistory.children[1];
+    if (first) { viewHistory.insertBefore(item, first); }
+    else { viewHistory.appendChild(item); }
+  }
+
   function renderHistoryView() {
     Array.from(viewHistory.children).forEach(function(c) { if (c !== emptyHistory) c.remove(); });
     emptyHistory.style.display = convHistory.length === 0 ? '' : 'none';
-
-    convHistory.forEach(function(conv) {
-      var firstPrompt = conv.exchanges[0] ? conv.exchanges[0].prompt : '';
-      var count = conv.exchanges.length;
-
-      var item = document.createElement('div');
-      item.className = 'hist-item';
-
-      var header = document.createElement('div');
-      header.className = 'hist-item-header';
-
-      var arrow = document.createElement('span');
-      arrow.className = 'hist-arrow';
-      arrow.textContent = '\u25b6';
-
-      var meta = document.createElement('div');
-      meta.className = 'hist-item-meta';
-
-      var timeEl = document.createElement('div');
-      timeEl.className = 'hist-item-time';
-      var timeText = conv.startTime || '';
-      if (conv.modelFamily) { timeText = timeText + '  \u00b7 ' + conv.modelFamily; }
-      timeEl.textContent = timeText;
-
-      var preview = document.createElement('div');
-      preview.className = 'hist-item-preview';
-      preview.textContent = trunc(firstPrompt, 55);
-      preview.title = firstPrompt;
-
-      meta.appendChild(timeEl);
-      meta.appendChild(preview);
-
-      var countEl = document.createElement('div');
-      countEl.className = 'hist-item-count';
-      countEl.textContent = count + (count === 1 ? ' intercambio' : ' intercambios');
-
-      header.appendChild(arrow);
-      header.appendChild(meta);
-      header.appendChild(countEl);
-      header.addEventListener('click', function() { item.classList.toggle('open'); });
-
-      var body = document.createElement('div');
-      body.className = 'hist-item-body';
-      conv.exchanges.forEach(function(ex) {
-        body.appendChild(makeBubble('prompt',   'P', trunc(ex.prompt,   250), true));
-        body.appendChild(makeBubble('response', 'R', trunc(ex.response, 250), true));
-      });
-
-      item.appendChild(header);
-      item.appendChild(body);
-      viewHistory.appendChild(item);
-    });
+    convHistory.forEach(function(conv) { viewHistory.appendChild(makeHistItem(conv)); });
   }
 
   function updateHistBadge() {
@@ -624,16 +637,39 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     histCount.className = 'hist-count' + (convHistory.length === 0 ? ' zero' : '');
   }
 
+  var saveHistTimer = null;
+  function scheduleSaveHistory() {
+    if (saveHistTimer) { clearTimeout(saveHistTimer); }
+    saveHistTimer = setTimeout(function() {
+      saveHistTimer = null;
+      vscode.postMessage({ command: 'saveHistory', history: convHistory });
+    }, 500);
+  }
+
   function archiveConv(convId) {
     var key = convId || '__anon__';
     var conv = activeConvs.get(key);
     if (conv && conv.exchanges.length > 0) {
-      conv.pendingPrompt = null;
-      convHistory.unshift(conv);
+      var entry = {
+        id: conv.id,
+        startTime: conv.startTime,
+        modelFamily: conv.modelFamily,
+        exchanges: conv.exchanges.map(function(ex) {
+          return {
+            prompt:     ex.prompt     ? ex.prompt.slice(0, 500)   : '',
+            promptTs:   ex.promptTs,
+            response:   ex.response   ? ex.response.slice(0, 2000) : '',
+            responseTs: ex.responseTs,
+            elapsed:    ex.elapsed || null,
+            isError:    ex.isError || false
+          };
+        })
+      };
+      convHistory.unshift(entry);
       if (convHistory.length > 100) { convHistory.length = 100; }
       updateHistBadge();
-      renderHistoryView();
-      vscode.postMessage({ command: 'saveHistory', history: convHistory });
+      prependHistoryItem(entry);
+      scheduleSaveHistory();
     }
     activeConvs.delete(key);
   }
@@ -665,7 +701,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
     if (currentTab !== 'current') { switchTab('current'); }
   }
 
-  function handleResponse(text, timestamp, conversationId) {
+  function handleResponse(text, timestamp, conversationId, elapsed) {
     var key = conversationId || '__anon__';
     var conv = activeConvs.get(key);
     if (conv && conv.pendingPrompt) {
@@ -673,7 +709,8 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
         prompt:     conv.pendingPrompt.text,
         promptTs:   conv.pendingPrompt.ts,
         response:   text,
-        responseTs: timestamp
+        responseTs: timestamp,
+        elapsed:    elapsed || null
       });
       conv.pendingPrompt = null;
     }
@@ -705,7 +742,10 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
 
   clearBtn.addEventListener('click', function() {
     activeConvs.clear();
+    convHistory = [];
+    updateHistBadge();
     renderCurrentView();
+    renderHistoryView();
     vscode.postMessage({ command: 'clearAll' });
   });
 
@@ -740,7 +780,7 @@ export class AiRunnerProvider implements vscode.WebviewViewProvider {
         var elLabel = data.elapsed ? ' ' + data.elapsed + 'ms' : '';
         var chLabel = ' ' + data.text.length + 'c';
         appendLog('info', wLabel + '\u2190 [' + (data.conversationId || 'anon') + '] OK' + chLabel + elLabel);
-        handleResponse(data.text, data.timestamp, data.conversationId);
+        handleResponse(data.text, data.timestamp, data.conversationId, data.elapsed);
       } else if (data.type === 'error') {
         appendLog('error', wLabel + data.text);
         handleError(data.text, data.conversationId);

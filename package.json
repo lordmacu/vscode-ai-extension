@@ -53,6 +53,13 @@
           "type": "string",
           "default": "finearom-ai-2025",
           "description": "API key for the AI prompt server (X-Api-Key header)"
+        },
+        "aiRunner.timeoutSeconds": {
+          "type": "number",
+          "default": 120,
+          "minimum": 30,
+          "maximum": 600,
+          "description": "Timeout in seconds for each prompt execution (30-600)"
         }
       }
     }
